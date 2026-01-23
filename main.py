@@ -6,16 +6,16 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 (SETTINGS) =================
+# [주의] 호환성 체크 봇은 'DISCORD_WEBHOOK'이라는 이름의 키를 사용합니다.
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK')
 
 if not WEBHOOK_URL:
-    print("⚠️ 오류: 웹훅 URL을 찾을 수 없습니다. GitHub Secrets 설정을 확인하세요.")
-    exit() # 주소가 없으면 봇 종료
-    
+    print("⚠️ 오류: 웹훅 URL을 찾을 수 없습니다. Secrets 설정(DISCORD_WEBHOOK)을 확인하세요.")
+    exit()
+
 MIN_REVIEWS = 50  # 리뷰 50개 이상인 게임만 알림
 HISTORY_FILE = "sent_games.json"
 
-# 한글 상태 표기 맵핑
 STATUS_KOREAN = {
     "Verified": "완벽 호환",
     "Playable": "플레이 가능",
@@ -40,7 +40,6 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False)
 
 def fetch_games_by_status(status_name, category_code):
-    # l=koreana: 한국어, cc=kr: 한국 원화
     url = f"https://store.steampowered.com/search/?sort_by=Released_DESC&category1=998&deck_compatibility={category_code}&l=koreana&cc=kr"
     
     try:
@@ -61,12 +60,27 @@ def fetch_games_by_status(status_name, category_code):
 
     for row in rows:
         try:
-            appid = row.get('data-ds-appid')
-            if not appid: continue
+            # [개선] 앱 ID 파싱 안전장치 추가
+            raw_appid = row.get('data-ds-appid')
+            if not raw_appid: continue
+            appid = raw_appid.split(',')[0]
             
             title_tag = row.select_one(".title")
             title = title_tag.text.strip() if title_tag else "Unknown"
             link = row.get('href', '')
+            
+            # [개선] 이미지 추출 로직 강화 (HTML에서 직접 추출 시도)
+            img_url = ""
+            img_tag = row.select_one(".search_capsule img")
+            if img_tag:
+                img_url = img_tag.get('src')
+                srcset = img_tag.get('srcset')
+                if srcset:
+                    img_url = srcset.split(',')[0].split(' ')[0]
+            
+            # 없으면 기본 헤더 이미지 사용
+            if not img_url:
+                img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
             
             # 리뷰 파싱
             review_count = 0
@@ -79,34 +93,18 @@ def fetch_games_by_status(status_name, category_code):
                 if parts:
                     review_sentiment = parts[0].strip()
                 
-                # 숫자만 추출
-                nums = ''.join(filter(str.isdigit, raw_tooltip))
-                # 너무 긴 숫자(날짜 등)가 섞일 수 있으므로 '개' 앞의 숫자나 패턴으로 찾기
-                if "사용자 평가" in raw_tooltip and "개" in raw_tooltip:
-                     try:
-                        # 예: "사용자 평가 211개 중" -> 211 추출
-                        check_str = raw_tooltip.split("사용자 평가")[1].split("개")[0]
-                        review_count = int(''.join(filter(str.isdigit, check_str)))
-                     except:
-                        pass
-                elif nums:
-                     # 단순 숫자 추출 (가장 간단한 방식, 오차 가능성 낮음)
-                     # 보통 툴팁에 "211 user reviews" 식으로 나오므로
-                     # 첫 번째로 발견되는 의미있는 숫자 덩어리를 씀
-                     # 여기서는 안전하게 기존 방식 유지하되 0 처리
-                     import re
-                     match = re.search(r'([0-9,]+)개', raw_tooltip)
-                     if match:
-                         review_count = int(match.group(1).replace(',', ''))
+                # 숫자 추출
+                import re
+                match = re.search(r'([0-9,]+)개', raw_tooltip)
+                if match:
+                    review_count = int(match.group(1).replace(',', ''))
             
             # 가격 파싱
             price_text = "가격 정보 없음"
-            price_element = row.select_one(".discount_final_price")
-            if not price_element:
-                price_element = row.select_one(".search_price")
+            price_el = row.select_one(".discount_final_price") or row.select_one(".search_price")
             
-            if price_element:
-                price_text = price_element.text.strip()
+            if price_el:
+                price_text = price_el.text.strip()
                 if "Free" in price_text or "무료" in price_text:
                     price_text = "무료"
 
@@ -118,7 +116,8 @@ def fetch_games_by_status(status_name, category_code):
                     "reviews": review_count,
                     "sentiment": review_sentiment,
                     "price": price_text,
-                    "status": status_name
+                    "status": status_name,
+                    "img": img_url # 이미지 URL 저장
                 })
         except Exception:
             continue
@@ -128,18 +127,17 @@ def fetch_games_by_status(status_name, category_code):
 def send_discord_alert(game, is_update=False, old_status=None):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
     
-    # 영문 상태 -> 한글 상태 변환
     kr_status = STATUS_KOREAN.get(game['status'], game['status'])
     kr_old_status = STATUS_KOREAN.get(old_status, old_status)
 
     if game['status'] == "Verified":
-        color = '00ff00' # 초록
+        color = '00ff00' 
         status_icon = "🟢"
     elif game['status'] == "Playable":
-        color = 'ffff00' # 노랑
+        color = 'ffff00' 
         status_icon = "🟡"
     else:
-        color = 'ff0000' # 빨강
+        color = 'ff0000' 
         status_icon = "🔴"
 
     info_block = (
@@ -156,8 +154,10 @@ def send_discord_alert(game, is_update=False, old_status=None):
         desc = f"결과: **{kr_status}**\n{info_block}"
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
-    img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{game['id']}/header.jpg"
-    embed.set_thumbnail(url=img_url)
+    
+    # [핵심 변경] set_thumbnail -> set_image (큰 이미지)
+    if game.get('img'):
+        embed.set_image(url=game['img'])
 
     webhook.add_embed(embed)
     webhook.execute()
@@ -166,24 +166,17 @@ def run():
     print("Bot started...")
     history = load_history()
     
-    # 1. 모든 상태 수집
     verified = fetch_games_by_status("Verified", 3)
     playable = fetch_games_by_status("Playable", 2)
     unsupported = fetch_games_by_status("Unsupported", 1)
     
-    # 2. [핵심 수정] 중복 제거 및 우선순위 정하기
-    # Verified가 리스트 앞에 오므로, 먼저 딕셔너리에 넣으면 나중에 오는 Unsupported는 무시됨
-    # (반대로 넣어야 나중에 덮어씌워지지 않게 하려면, '이미 있으면 패스' 하는 로직 사용)
-    
+    # 중복 제거 로직
     all_raw_games = verified + playable + unsupported
     unique_games = {}
     
     for g in all_raw_games:
-        # 이미 딕셔너리에 이 게임이 있다면? (즉, 더 좋은 등급으로 이미 처리됐다면) 건너뜀
         if g['id'] not in unique_games:
             unique_games[g['id']] = g
-    
-    # 이제 unique_games.values()에는 각 게임별로 가장 우선순위 높은 등급 하나만 남음
     
     msg_count = 0
     
@@ -191,7 +184,6 @@ def run():
         appid = game['id']
         current_status = game['status']
         
-        # 신규 발견
         if appid not in history:
             print(f"New: {game['title']} ({current_status})")
             send_discord_alert(game, is_update=False)
@@ -199,7 +191,6 @@ def run():
             msg_count += 1
             time.sleep(1)
             
-        # 상태 변경
         elif history[appid] != current_status:
             old_status = history[appid]
             print(f"Changed: {game['title']} ({old_status} -> {current_status})")
