@@ -6,15 +6,21 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
-WEBHOOK_URL = "https://discord.com/api/webhooks/1464325575505215499/MRwIZuOSNWzHqtZAeKVnKTa9GsgReAq3q7PSKejoq9J2uE2GHvgqjX9qZ6rP911e_-7n"
-MIN_REVIEWS = 50  # 리뷰 50개 이상 (다운로드 수 필터링용)
+# 여기에 아까 복사한 디스코드 웹훅 주소를 그대로 넣으세요
+WEBHOOK_URL = "여기에_디스코드_웹훅_URL을_붙여넣으세요"
+
+# 테스트를 위해 리뷰 수 제한을 0으로 낮춥니다
+MIN_REVIEWS = 0 
 HISTORY_FILE = "sent_games.json"
 # =======================================
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return []
     return []
 
 def save_history(history):
@@ -22,30 +28,40 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False)
 
 def get_new_verified_games():
-    # 스팀 검색: 'Deck Verified(3)' 정렬: '출시일(Released_DESC)'
+    # 스팀 덱 호환성 필터 적용된 검색 페이지
     url = "https://store.steampowered.com/search/?sort_by=Released_DESC&category1=998&deck_compatibility=3"
     response = requests.get(url)
+    
+    # 봇 차단 방지용 헤더 (브라우저인 척 하기)
+    if response.status_code != 200:
+        print(f"Error: 스팀 접속 실패 (상태코드: {response.status_code})")
+        return []
+
     soup = BeautifulSoup(response.text, "html.parser")
-    
     games = []
-    # 검색 결과 상위 25개만 확인 (하루 2번 체크하므로 충분)
-    rows = soup.select("#search_resultsRows > a")
     
+    # 검색 결과 가져오기
+    rows = soup.select("#search_resultsRows > a")
+    print(f"🔍 검색된 게임 수: {len(rows)}개") # 로그 출력
+
     for row in rows:
         try:
             appid = row['data-ds-appid']
             title = row.select_one(".title").text.strip()
             link = row['href']
             
-            # 리뷰 수 체크 (검색 페이지 HTML 파싱)
+            # 리뷰 수 체크
             review_summary = row.select_one(".search_review_summary")
             review_count = 0
             if review_summary:
-                # 툴팁 데이터에서 숫자 추출 (예: "35 User Reviews")
                 raw_reviews = review_summary.get('data-tooltip-html', '')
-                review_count = int(''.join(filter(str.isdigit, raw_reviews.split('<br>')[0])))
+                # 숫자만 추출
+                nums = ''.join(filter(str.isdigit, raw_reviews.split('<br>')[0]))
+                if nums:
+                    review_count = int(nums)
             
-            # 조건: 리뷰 수가 설정값 이상인 경우만
+            print(f" - 확인 중: {title} (리뷰: {review_count}개)") # 로그 출력
+
             if review_count >= MIN_REVIEWS:
                 games.append({
                     "id": appid,
@@ -53,37 +69,46 @@ def get_new_verified_games():
                     "link": link,
                     "reviews": review_count
                 })
-        except Exception:
+        except Exception as e:
+            print(f"파싱 에러 발생: {e}")
             continue
             
     return games
 
 def run():
+    print("🤖 봇 실행 시작...")
     history = load_history()
     new_games = get_new_verified_games()
     updated_history = history[:]
     
-    # 알림 보낼 게임 찾기
+    msg_count = 0
     for game in new_games:
+        # 중복 체크 (이미 보낸 건지)
         if game['id'] not in history:
-            print(f"New Game Found: {game['title']}")
+            print(f"🚀 전송 시도: {game['title']}")
             
-            # 디스코드 전송
             webhook = DiscordWebhook(url=WEBHOOK_URL)
-            embed = DiscordEmbed(title=f"🟢 스팀덱 호환 완료: {game['title']}", 
-                                 description=f"리뷰 수: {game['reviews']}개\n[스팀 페이지 바로가기]({game['link']})", 
+            embed = DiscordEmbed(title=f"🟢 스팀덱 호환 확인: {game['title']}", 
+                                 description=f"리뷰 수: {game['reviews']}개\n[스팀 페이지]({game['link']})", 
                                  color='00ff00')
             webhook.add_embed(embed)
-            webhook.execute()
+            response = webhook.execute()
             
-            updated_history.append(game['id'])
-            time.sleep(1) # 도배 방지
-            
-    # 최신 500개만 기억 (파일 용량 관리)
-    if len(updated_history) > 500:
-        updated_history = updated_history[-500:]
-        
-    save_history(updated_history)
+            if response.status_code == 200 or response.status_code == 204:
+                print(" -> 전송 성공!")
+                updated_history.append(game['id'])
+                msg_count += 1
+            else:
+                print(f" -> 전송 실패 (코드: {response.status_code})")
+
+            time.sleep(1) 
+    
+    if msg_count == 0:
+        print("💤 새로 보낼 알림이 없습니다.")
+    else:
+        # 파일 저장
+        save_history(updated_history)
+        print("💾 기록 저장 완료.")
 
 if __name__ == "__main__":
     run()
