@@ -26,6 +26,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run bot script
+        env:  # [추가됨] 봇에게 비밀키 전달
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           python main.py
 
