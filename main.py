@@ -7,7 +7,7 @@ from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
 # 여기에 아까 복사한 디스코드 웹훅 주소를 그대로 넣으세요
-WEBHOOK_URL = "여기에_디스코드_웹훅_URL을_붙여넣으세요"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1464325575505215499/MRwIZuOSNWzHqtZAeKVnKTa9GsgReAq3q7PSKejoq9J2uE2GHvgqjX9qZ6rP911e_-7n"
 
 # 테스트를 위해 리뷰 수 제한을 0으로 낮춥니다
 MIN_REVIEWS = 0 
