@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
-# [중요] 아까 만든 'DISCORD_WEBHOOK_NEW' 비밀키를 사용합니다.
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_NEWSALES')
 
 if not WEBHOOK_URL:
