@@ -1,0 +1,42 @@
+name: Check New Releases
+
+on:
+  schedule:
+    # 한국 시간 기준 대략 오전 9시 30분, 오후 9시 30분 (UTC 00:30, 12:30)
+    - cron: '30 0,12 * * *'
+  workflow_dispatch: # 수동 실행 가능
+
+jobs:
+  check-new:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 기록 저장 권한
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run new release script
+        env:
+          # 여기서 아까 만든 'DISCORD_WEBHOOK_NEW'를 사용합니다
+          DISCORD_WEBHOOK_NEW: ${{ secrets.DISCORD_WEBHOOK_NEW }}
+        run: |
+          python new_releases.py
+          
+      - name: Commit and push history
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "actions@github.com"
+          git add sent_new_releases.json
+          # 변경사항이 없으면 에러 없이 종료 (|| exit 0)
+          git commit -m "Update new releases history" || exit 0
+          git push
