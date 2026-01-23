@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
+# 변수 이름이 맞는지 확인하세요 (NEWSALES)
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_NEWSALES')
 
 if not WEBHOOK_URL:
@@ -26,14 +27,11 @@ def load_history():
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
-        # 최근 500개만 저장 (용량 관리)
         if len(history) > 500:
             history = history[-500:]
         json.dump(history, f, ensure_ascii=False)
 
 def fetch_new_releases():
-    # 정렬: 출시일 순(Released_DESC), 카테고리: 게임(category1=998)
-    # 언어: 한국어, 통화: KRW
     url = "https://store.steampowered.com/search/?sort_by=Released_DESC&category1=998&l=koreana&cc=kr"
     
     try:
@@ -46,29 +44,38 @@ def fetch_new_releases():
         rows = soup.select("#search_resultsRows > a")
         
         games = []
-        # 최신 15개만 확인 (너무 많이 긁으면 과거 게임까지 알림 갈 수 있음)
+        # 최신 15개 확인
         for row in rows[:15]:
             try:
-                appid = row.get('data-ds-appid')
-                if not appid: continue
+                # [수정 1] 앱 ID가 '123,456' 처럼 여러 개일 경우 첫 번째만 가져오기 (이미지 깨짐 방지)
+                raw_appid = row.get('data-ds-appid')
+                if not raw_appid: continue
+                appid = raw_appid.split(',')[0] 
                 
                 title = row.select_one(".title").text.strip()
                 link = row['href']
                 
-                # 가격 파싱
                 price_text = "가격 정보 없음"
                 price_el = row.select_one(".discount_final_price") or row.select_one(".search_price")
                 if price_el:
                     price_text = price_el.text.strip()
                     if "Free" in price_text or "무료" in price_text: price_text = "무료"
                 
-                # 이미지 (헤더 이미지)
-                img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
-
-                # 태그(장르) 파싱 - 있으면 좋음
-                tags = []
-                # (스팀 검색 페이지는 태그 정보를 간단하게만 줌, 생략 가능하지만 일단 시도)
+                # [수정 2] 이미지를 더 확실하게 가져오기 (HTML 태그에서 직접 추출 시도)
+                img_url = ""
+                img_tag = row.select_one(".search_capsule img")
+                if img_tag:
+                    img_url = img_tag.get('src')
+                    # 고해상도 이미지가 있으면 그걸로 교체 (srcset)
+                    srcset = img_tag.get('srcset')
+                    if srcset:
+                        # "url 1x, url 2x" 형태이므로 2x(고화질) 우선 시도
+                        img_url = srcset.split(',')[0].split(' ')[0]
                 
+                # HTML에서 못 찾았으면 기본 URL 생성
+                if not img_url:
+                    img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
+
                 games.append({
                     "id": str(appid),
                     "title": title,
@@ -76,10 +83,9 @@ def fetch_new_releases():
                     "price": price_text,
                     "img": img_url
                 })
-            except Exception:
+            except Exception as e:
                 continue
         
-        # 최신순 정렬되어 있으므로, 역순(과거->최신)으로 뒤집어서 알림 보내면 더 자연스러움
         return games[::-1]
         
     except Exception as e:
@@ -91,9 +97,12 @@ def send_discord_alert(game):
     
     embed = DiscordEmbed(title=f"🆕 스팀 신작 출시: {game['title']}", 
                          description=f"**가격:** {game['price']}\n[상점 페이지 구경하기]({game['link']})", 
-                         color='00b0f4') # 하늘색
+                         color='00b0f4')
     
-    embed.set_thumbnail(url=game['img'])
+    # [수정 3] set_thumbnail 대신 set_image 사용 -> 이미지가 하단에 꽉 차게 나옴
+    if game['img']:
+        embed.set_image(url=game['img'])
+        
     webhook.add_embed(embed)
     webhook.execute()
 
@@ -111,7 +120,7 @@ def run():
             send_discord_alert(game)
             updated_history.append(game['id'])
             msg_count += 1
-            time.sleep(1) # 도배 방지
+            time.sleep(1)
             
     if msg_count > 0:
         save_history(updated_history)
