@@ -5,15 +5,13 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
-# 1회성이므로 환경변수에서 가져오거나, 테스트용으로 직접 넣어도 됩니다.
-# 여기서는 기존과 동일하게 환경변수(Secrets)를 사용하도록 설정했습니다.
+# 1회성 채우기용이므로 메인 봇 웹훅(DISCORD_WEBHOOK)을 사용합니다.
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK')
 
 if not WEBHOOK_URL:
-    print("⚠️ 오류: 웹훅 URL이 없습니다. Secrets 설정을 확인하세요.")
+    print("⚠️ 오류: 웹훅 URL이 없습니다. Secrets 설정(DISCORD_WEBHOOK)을 확인하세요.")
     exit()
 
-# 한글 상태 표기
 STATUS_KOREAN = {
     "Verified": "완벽 호환",
     "Playable": "플레이 가능",
@@ -22,10 +20,6 @@ STATUS_KOREAN = {
 # =======================================
 
 def fetch_top_games(status_name, category_code, limit=10):
-    """
-    인기 순(filter=topsellers)으로 정렬하여 상위 n개만 가져오기
-    """
-    # filter=topsellers: 판매량 순 정렬
     url = f"https://store.steampowered.com/search/?filter=topsellers&category1=998&deck_compatibility={category_code}&l=koreana&cc=kr"
     
     try:
@@ -41,14 +35,30 @@ def fetch_top_games(status_name, category_code, limit=10):
         count = 0
         
         for row in rows:
-            if count >= limit: break # 목표 개수 채우면 중단
+            if count >= limit: break
             
             try:
-                appid = row.get('data-ds-appid')
-                if not appid: continue
+                # [안전장치] 번들 등으로 ID가 여러 개일 경우 첫 번째만 사용
+                raw_appid = row.get('data-ds-appid')
+                if not raw_appid: continue
+                appid = raw_appid.split(',')[0]
                 
                 title = row.select_one(".title").text.strip()
                 link = row['href']
+                
+                # [이미지] 큰 이미지를 위해 스팀 페이지에서 직접 추출 시도
+                img_url = ""
+                img_tag = row.select_one(".search_capsule img")
+                if img_tag:
+                    img_url = img_tag.get('src')
+                    srcset = img_tag.get('srcset')
+                    if srcset:
+                        # 고해상도 이미지 우선
+                        img_url = srcset.split(',')[0].split(' ')[0]
+                
+                # 실패시 기본 헤더 이미지 사용
+                if not img_url:
+                    img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
                 
                 # 가격 파싱
                 price_text = "가격 정보 없음"
@@ -66,7 +76,6 @@ def fetch_top_games(status_name, category_code, limit=10):
                     parts = raw_tooltip.split('<br>')
                     if parts: review_sentiment = parts[0].strip()
                     
-                    # 숫자 추출
                     import re
                     match = re.search(r'([0-9,]+)개', raw_tooltip)
                     if match:
@@ -79,7 +88,8 @@ def fetch_top_games(status_name, category_code, limit=10):
                     "reviews": review_count,
                     "sentiment": review_sentiment,
                     "price": price_text,
-                    "status": status_name
+                    "status": status_name,
+                    "img": img_url # 이미지 추가
                 })
                 count += 1
                 
@@ -116,27 +126,28 @@ def send_discord_alert(game):
     )
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
-    embed.set_thumbnail(url=f"https://cdn.cloudflare.steamstatic.com/steam/apps/{game['id']}/header.jpg")
+    
+    # [변경됨] 썸네일 대신 큰 이미지 사용 (set_image)
+    if game.get('img'):
+        embed.set_image(url=game['img'])
+        
     webhook.add_embed(embed)
     webhook.execute()
 
 def run():
-    print("📢 인기 게임 리스트 채우기 시작...")
+    print("📢 인기 게임 리스트 채우기 시작 (큰 이미지 버전)...")
     
-    # 인기 순위 상위 10개씩 가져오기 (총 20개 알림)
-    # 1. 완벽 호환 (Verified) TOP 10
+    # 인기 순위 상위 10개씩
     verified_games = fetch_top_games("Verified", 3, limit=10)
-    
-    # 2. 플레이 가능 (Playable) TOP 10
     playable_games = fetch_top_games("Playable", 2, limit=10)
     
     all_games = verified_games + playable_games
-    print(f"총 {len(all_games)}개의 인기 게임을 전송합니다.")
+    print(f"총 {len(all_games)}개의 게임을 전송합니다.")
     
     for game in all_games:
         print(f"전송 중: {game['title']}")
         send_discord_alert(game)
-        time.sleep(2) # 디스코드 도배 방지용 딜레이 (2초)
+        time.sleep(2) 
 
 if __name__ == "__main__":
     run()
