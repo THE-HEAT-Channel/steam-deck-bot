@@ -28,7 +28,7 @@ jobs:
       - name: Run new release script
         env:
           # 여기서 아까 만든 'DISCORD_WEBHOOK_NEW'를 사용합니다
-          DISCORD_WEBHOOK_NEW: ${{ secrets.DISCORD_WEBHOOK_NEW }}
+          DISCORD_WEBHOOK_NEW: ${{ secrets.DISCORD_WEBHOOK_NEWSALES }}
         run: |
           python new_releases.py
           
