@@ -1,0 +1,39 @@
+name: Check SteamOS Updates
+
+on:
+  schedule:
+    # 캐나다 토론토 시간 기준 10:00 AM, 10:00 PM (UTC 15:00, 03:00)
+    - cron: '0 3,15 * * *'
+  workflow_dispatch: # 수동 실행 버튼
+
+jobs:
+  check-steamos:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 파일 저장 권한
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run check script
+        env:
+          # 개인용 비밀키 사용
+          WEBHOOK_PRIVATE: ${{ secrets.WEBHOOK_PRIVATE }}
+        run: python check_steamos.py
+          
+      - name: Commit and push history
+        run: |
+          git config --global user.name "SteamOS Bot"
+          git config --global user.email "bot@github.com"
+          git add sent_steamos.json
+          git commit -m "Update history" || exit 0
+          git push
