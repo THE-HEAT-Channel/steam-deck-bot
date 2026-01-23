@@ -6,9 +6,12 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 (SETTINGS) =================
-# 여기에 본인의 디스코드 웹훅 주소를 넣어주세요
-WEBHOOK_URL = "https://discord.com/api/webhooks/1464325575505215499/MRwIZuOSNWzHqtZAeKVnKTa9GsgReAq3q7PSKejoq9J2uE2GHvgqjX9qZ6rP911e_-7n"
+WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK')
 
+if not WEBHOOK_URL:
+    print("⚠️ 오류: 웹훅 URL을 찾을 수 없습니다. GitHub Secrets 설정을 확인하세요.")
+    exit() # 주소가 없으면 봇 종료
+    
 MIN_REVIEWS = 50  # 리뷰 50개 이상인 게임만 알림
 HISTORY_FILE = "sent_games.json"
 
