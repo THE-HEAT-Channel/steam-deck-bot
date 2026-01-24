@@ -1,46 +1,39 @@
-import requests
-import json
-import os
-import time
-from discord_webhook import DiscordWebhook, DiscordEmbed
-from bs4 import BeautifulSoup
+name: Check SteamOS Updates
 
-# ================= 설정 =================
-WEBHOOK_URL = os.environ.get('WEBHOOK_PRIVATE')
+on:
+  schedule:
+    # 한국 시간 아침 8시 ~ 밤 11시까지, 매시간 17분에 실행
+    - cron: '17 0-14,23 * * *'
+  workflow_dispatch:
 
-if not WEBHOOK_URL:
-    print("⚠️ 오류: WEBHOOK_PRIVATE 설정이 필요합니다.")
-    exit()
+jobs:
+  check-steamos:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-HISTORY_FILE = "sent_steamos.json"
-# 감시 키워드
-KEYWORDS = ["Preview", "SteamOS", "Client Update", "Beta", "Stable"]
-# =======================================
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
 
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r", encoding='utf-8') as f:
-            try:
-                return json.load(f)
-            except:
-                return []
-    return []
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
 
-def save_history(history):
-    with open(HISTORY_FILE, "w", encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False)
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-def fetch_steamos_news():
-    url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=1675200&count=10&format=json"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        news_items = data['appnews']['newsitems']
-        
-        updates = []
-        for item in news_items:
-            title = item['title']
-            
-            # 키워드 체크
-            if any(k.lower() in
+      - name: Run check script
+        env:
+          WEBHOOK_PRIVATE: ${{ secrets.WEBHOOK_PRIVATE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python check_steamos.py
+          
+      - name: Commit and push history
+        run: |
+          git config --global user.name "SteamOS Bot"
+          git config --global user.email "bot@github.com"
+          git add sent_steamos.json
+          git commit -m "Update history" || exit 0
+          git push
