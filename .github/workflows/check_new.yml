@@ -2,8 +2,8 @@ name: Check New Releases
 
 on:
   schedule:
-    # 한국 시간 기준 대략 오전 9시 30분, 오후 9시 30분 (UTC 00:30, 12:30)
-    - cron: '30 0,12 * * *'
+    # 한국 아침 9:45, 저녁 9:45 (UTC 0:45, 12:45)
+    - cron: '45 0,12 * * *'
   workflow_dispatch: # 수동 실행 가능
 
 jobs:
