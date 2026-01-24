@@ -2,15 +2,15 @@ name: Check New Releases
 
 on:
   schedule:
-    # 한국 아침 9:45, 저녁 9:45 (UTC 0:45, 12:45)
-    - cron: '45 0,12 * * *'
-  workflow_dispatch: # 수동 실행 가능
+    # 한국 시간 아침 8시 ~ 밤 11시까지, 매시간 17분에 실행
+    - cron: '17 0-14,23 * * *'
+  workflow_dispatch:
 
 jobs:
   check-new:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 기록 저장 권한
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -27,7 +27,6 @@ jobs:
 
       - name: Run new release script
         env:
-          # 여기서 아까 만든 'DISCORD_WEBHOOK_NEW'를 사용합니다
           DISCORD_WEBHOOK_NEWSALES: ${{ secrets.DISCORD_WEBHOOK_NEWSALES }}
         run: |
           python new_releases.py
@@ -37,6 +36,5 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           git add sent_new_releases.json
-          # 변경사항이 없으면 에러 없이 종료 (|| exit 0)
           git commit -m "Update new releases history" || exit 0
           git push
