@@ -13,7 +13,7 @@ if not WEBHOOK_URL:
     print("⚠️ 오류: DISCORD_WEBHOOK_NEWVIDEO 시크릿이 설정되지 않았습니다.")
     exit()
 
-YOUTUBE_CHANNEL_ID = "UCcJeDBJiD3SlIvnKEplxX" 
+YOUTUBE_CHANNEL_ID = "UCcJeDBJiD3SlIvnKEplxX-Q" 
 
 HISTORY_FILE = "sent_videos.json"
 # =======================================
