@@ -2,8 +2,8 @@ name: Steam Deck Bot
 
 on:
   schedule:
-    # 한국 시간 기준 대략 오전 9시, 오후 9시 (UTC 0시, 12시)
-    - cron: '0 0,12 * * *'
+    # 한국 아침 9:15, 저녁 9:15 (UTC 0:15, 12:15)
+    - cron: '15 0,12 * * *'
   workflow_dispatch: # 수동 실행 버튼 추가
 
 jobs:
