@@ -1,39 +1,46 @@
-name: Check SteamOS Updates
+import requests
+import json
+import os
+import time
+from discord_webhook import DiscordWebhook, DiscordEmbed
+from bs4 import BeautifulSoup
 
-on:
-  schedule:
-    # 캐나다 토론토 시간 기준 10:00 AM, 10:00 PM (UTC 15:00, 03:00)
-    - cron: '0 3,15 * * *'
-  workflow_dispatch: # 수동 실행 버튼
+# ================= 설정 =================
+WEBHOOK_URL = os.environ.get('WEBHOOK_PRIVATE')
 
-jobs:
-  check-steamos:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # 파일 저장 권한
+if not WEBHOOK_URL:
+    print("⚠️ 오류: WEBHOOK_PRIVATE 설정이 필요합니다.")
+    exit()
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+HISTORY_FILE = "sent_steamos.json"
+# 감시 키워드
+KEYWORDS = ["Preview", "SteamOS", "Client Update", "Beta", "Stable"]
+# =======================================
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except:
+                return []
+    return []
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+def save_history(history):
+    with open(HISTORY_FILE, "w", encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False)
 
-      - name: Run check script
-        env:
-          # 개인용 비밀키 사용
-          WEBHOOK_PRIVATE: ${{ secrets.WEBHOOK_PRIVATE }}
-        run: python check_steamos.py
-          
-      - name: Commit and push history
-        run: |
-          git config --global user.name "SteamOS Bot"
-          git config --global user.email "bot@github.com"
-          git add sent_steamos.json
-          git commit -m "Update history" || exit 0
-          git push
+def fetch_steamos_news():
+    url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=1675200&count=10&format=json"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        news_items = data['appnews']['newsitems']
+        
+        updates = []
+        for item in news_items:
+            title = item['title']
+            
+            # 키워드 체크
+            if any(k.lower() in
