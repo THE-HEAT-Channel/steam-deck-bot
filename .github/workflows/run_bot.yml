@@ -2,15 +2,15 @@ name: Steam Deck Bot
 
 on:
   schedule:
-    # 한국 아침 9:15, 저녁 9:15 (UTC 0:15, 12:15)
-    - cron: '15 0,12 * * *'
-  workflow_dispatch: # 수동 실행 버튼 추가
+    # 한국 시간 아침 8시 ~ 밤 11시까지, 매시간 17분에 실행 (밤샘 방지)
+    - cron: '17 0-14,23 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 저장 권한
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -26,7 +26,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run bot script
-        env:  # [추가됨] 봇에게 비밀키 전달
+        env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           python main.py
