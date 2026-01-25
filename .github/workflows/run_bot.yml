@@ -1,8 +1,8 @@
 name: Steam Deck Bot
 
 on:
+  push:       # <--- 이 줄 추가 (코드 수정할 때마다 실행)
   schedule:
-    # 한국 시간 아침 8시 ~ 밤 11시까지, 매시간 17분에 실행 (밤샘 방지)
     - cron: '17 0-14,23 * * *'
   workflow_dispatch:
 
