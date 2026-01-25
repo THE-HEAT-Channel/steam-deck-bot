@@ -1,8 +1,8 @@
 name: Check YouTube Uploads
 
 on:
+  push:       # <--- 이 줄 추가
   schedule:
-    # 한국 시간 아침 8시 ~ 밤 11시, 매시 17분 실행
     - cron: '17 0-14,23 * * *'
   workflow_dispatch:
 
