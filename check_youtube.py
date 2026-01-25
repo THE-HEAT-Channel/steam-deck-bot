@@ -6,7 +6,7 @@ from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_NEWVIDEO')
-YOUTUBE_CHANNEL_ID = "UCcJeDBJiD3SlIvnKEplxX-Q"  # 따옴표 유지 필수!
+YOUTUBE_CHANNEL_ID = "UCcJeDBJiD3SlIvnKEplxX-Q" 
 HISTORY_FILE = "sent_videos.json"
 # =======================================
 
