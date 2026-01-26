@@ -3,7 +3,7 @@ name: Check SteamOS Updates
 on:
   push:      # <--- 이 줄 추가!
   schedule:
-    - cron: '17 0-14,23 * * *'
+   - cron: '17 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -36,4 +36,5 @@ jobs:
           git config --global user.email "bot@github.com"
           git add sent_steamos.json
           git commit -m "Update history" || exit 0
-          git push
+          git pull --rebase  # <--- [핵심] 1. 남들이 올린 거 먼저 받고
+          git push           # <--- [핵심] 2. 그 다음에 내 거 올리기
