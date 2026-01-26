@@ -36,4 +36,5 @@ jobs:
           git config --global user.email "bot@github.com"
           git add sent_videos.json
           git commit -m "Update video history" || exit 0
-          git push
+          git pull --rebase  # <--- [핵심] 1. 남들이 올린 거 먼저 받고
+          git push           # <--- [핵심] 2. 그 다음에 내 거 올리기
