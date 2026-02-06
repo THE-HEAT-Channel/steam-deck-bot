@@ -1,21 +1,16 @@
 name: Check Steam Sales & Fests
 
 on:
-  # 1. 코드를 푸시할 때 실행 (단, 봇이 JSON을 업데이트할 때는 실행 안 되게 설정 - 무한 루프 방지)
-  push:
-    paths-ignore:
-      - 'sent_sales.json'
-  # 2. 정해진 시간마다 실행 (예: 6시간마다)
+  # push 삭제됨 (이제 무한 루프 걱정 없음)
   schedule:
-    - cron: '0 */6 * * *' 
-  # 3. 수동 실행 버튼
+    - cron: '17 0-14,23 * * *' 
   workflow_dispatch:
 
 jobs:
   check-sales:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 저장소에 파일을 쓰고 푸시할 권한 필요
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -28,13 +23,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 라이브러리 설치 (버전 고정 권장 - 보안 파트 참고)
           pip install requests discord-webhook
 
       - name: Run sales check script
         env:
-          # Settings > Secrets에 'DISCORD_WEBHOOK_SALES'를 등록해야 합니다.
-          # 만약 기존 키를 쓴다면 secrets.DISCORD_WEBHOOK_NEWSALES 로 변경하세요.
           DISCORD_WEBHOOK_SALES: ${{ secrets.DISCORD_WEBHOOK_SALES }}
         run: |
           python check_sales.py
@@ -44,6 +36,6 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           
-          # 변경사항이 있을 때만 커밋 (에러 방지)
           git add sent_sales.json
+          # [핵심] [skip ci] 유지
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update sales history [skip ci]" && git pull --rebase && git push)

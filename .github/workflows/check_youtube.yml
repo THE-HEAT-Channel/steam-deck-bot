@@ -1,7 +1,7 @@
 name: Check YouTube Uploads
 
 on:
-  push:       # <--- 이 줄 추가
+  # push 삭제됨
   schedule:
     - cron: '17 0-14,23 * * *'
   workflow_dispatch:
@@ -26,7 +26,6 @@ jobs:
 
       - name: Run script
         env:
-          # [핵심] 여기서 이름을 맞춰줍니다.
           DISCORD_WEBHOOK_NEWVIDEO: ${{ secrets.DISCORD_WEBHOOK_NEWVIDEO }}
         run: python check_youtube.py
           
@@ -35,6 +34,5 @@ jobs:
           git config --global user.name "YouTube Bot"
           git config --global user.email "bot@github.com"
           git add sent_videos.json
-          git commit -m "Update video history" || exit 0
-          git pull --rebase  # <--- [핵심] 1. 남들이 올린 거 먼저 받고
-          git push           # <--- [핵심] 2. 그 다음에 내 거 올리기
+          # [핵심] [skip ci] 추가 및 에러 방지 로직 강화
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update video history [skip ci]" && git pull --rebase && git push)

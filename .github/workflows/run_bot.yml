@@ -1,10 +1,10 @@
 name: Steam Deck Bot
 
 on:
-  push:       # <--- 이 줄 추가 (코드 수정할 때마다 실행)
+  # push 삭제됨 (이제 코드를 수정해도 즉시 실행되지 않음)
   schedule:
     - cron: '17 0-14,23 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # 수동 실행 버튼 유지
 
 jobs:
   run-bot:
@@ -36,6 +36,5 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           git add sent_games.json
-          git commit -m "Update game history" || exit 0
-          git pull --rebase  # <--- [핵심] 1. 남들이 올린 거 먼저 받고
-          git push           # <--- [핵심] 2. 그 다음에 내 거 올리기
+          # [핵심] [skip ci] 추가: 이 커밋은 다른 액션을 깨우지 않음
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update game history [skip ci]" && git pull --rebase && git push)

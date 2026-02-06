@@ -1,7 +1,7 @@
 name: Check New Releases
 
 on:
-  push:       # <--- 이 줄 추가
+  # push 삭제됨
   schedule:
     - cron: '17 0-14,23 * * *'
   workflow_dispatch:
@@ -36,6 +36,5 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           git add sent_new_releases.json
-          git commit -m "Update new releases history" || exit 0
-          git pull --rebase  # <--- [핵심] 1. 남들이 올린 거 먼저 받고
-          git push           # <--- [핵심] 2. 그 다음에 내 거 올리기
+          # [핵심] [skip ci] 추가
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update new releases history [skip ci]" && git pull --rebase && git push)
