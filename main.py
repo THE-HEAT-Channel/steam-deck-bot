@@ -189,6 +189,13 @@ def run():
         # 2. 상태 변경 (이전 기록과 다르면)
         elif history[appid] != current_status:
             old_status = history[appid]
+            
+            # 기존 상태가 좋았는데(Verified/Playable), 갑자기 Unknown이 되면 무시(continue)합니다.
+            if current_status == "Unknown" and old_status in ["Verified", "Playable"]:
+                print(f"🛡️ 방어 발동: {game['title']} ({old_status} -> Unknown) - 일시적 오류 무시함")
+                continue
+            
+            # --- 아래는 기존 코드 그대로 ---
             print(f"🔄 변경: {game['title']} ({old_status} -> {current_status})")
             send_discord_alert(game, is_update=True, old_status=old_status)
             history[appid] = current_status
