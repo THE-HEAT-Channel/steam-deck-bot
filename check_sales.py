@@ -5,6 +5,7 @@ import time
 import re
 from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
+from deep_translator import GoogleTranslator
 
 # ================= 설정 =================
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_SALES')
@@ -37,80 +38,73 @@ def save_history(history):
         if len(history) > 50: history = history[-50:]
         json.dump(history, f, ensure_ascii=False)
 
-def clean_fallback_text(text):
-    """크롤링 실패 시, 원본 텍스트라도 최대한 깔끔하게 청소"""
-    # 유튜브 태그 제거
-    text = re.sub(r'\[previewyoutube=.*?\]\[/previewyoutube\]', '', text)
-    # 이미지 태그 제거
-    text = re.sub(r'\{STEAM_CLAN_IMAGE\}.+?(\s|\[|$)', '', text)
-    # [url=...] 링크 태그 정리
-    text = re.sub(r'\[url=(.*?)\](.*?)\[/url\]', r'\2', text)
-    # 나머지 대괄호 태그 제거
-    text = re.sub(r'\[.*?\]', '', text)
-    return text.strip()
+def translate_to_korean(text):
+    """영어를 한국어로 번역 (크롤링 실패 시 비상용)"""
+    try:
+        if len(text) < 2: return text
+        # 이미 한글이면 패스
+        if any(ord(c) > 12592 for c in text[:20]): return text
+        
+        translator = GoogleTranslator(source='auto', target='ko')
+        # 너무 길면 잘라서 번역
+        return translator.translate(text[:900]) 
+    except:
+        return text
 
-def scrape_steam_page(url):
-    print(f"🕵️‍♂️ 페이지 접속 시도: {url}")
+def extract_best_link(raw_text):
+    """
+    원본 텍스트에서 'category', 'sale', 'fests'가 포함된 '진짜 상점 링크'를 찾아냅니다.
+    """
+    # 1. 가장 우선순위: category, sale, fests 링크
+    # [url=https://store.steampowered.com/...] 형식 파싱
+    patterns = [
+        r'store\.steampowered\.com/category/[a-zA-Z0-9_/%]+',
+        r'store\.steampowered\.com/sale/[a-zA-Z0-9_/%]+',
+        r'store\.steampowered\.com/fests/[a-zA-Z0-9_/%]+'
+    ]
     
-    # [핵심] 쿠키 3종 세트: 한국어 설정 + 성인 인증 통과
-    cookies = {
-        'Steam_Language': 'koreana',
-        'birthtime': '946684801', # 2000년 1월 1일생으로 위장
-        'lastagecheckage': '1-0-2000'
-    }
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    for pat in patterns:
+        match = re.search(pat, raw_text)
+        if match:
+            return "https://" + match.group(0).replace('"', '').replace(']', '')
+            
+    return None
+
+def extract_youtube_id(raw_text):
+    """원본 텍스트에서 유튜브 ID 추출"""
+    # [previewyoutube=ID;full]
+    match = re.search(r'previewyoutube=([a-zA-Z0-9_-]+)', raw_text)
+    if match: return match.group(1)
+    return None
+
+def clean_raw_text(text):
+    """지저분한 태그 제거"""
+    text = re.sub(r'\[previewyoutube=.*?\]\[/previewyoutube\]', '', text)
+    text = re.sub(r'\{STEAM_CLAN_IMAGE\}.+?(\s|\[|$)', '', text)
+    text = re.sub(r'\[url=.*?\]', '', text)
+    text = re.sub(r'\[/url\]', '', text)
+    text = re.sub(r'\[.*?\]', '', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text).strip()
+    return text
+
+def scrape_official_korean(url):
+    """공식 한국어 페이지 크롤링 시도"""
+    print(f"🕵️‍♂️ 크롤링 시도: {url}")
+    cookies = {'Steam_Language': 'koreana', 'birthtime': '946684801', 'lastagecheckage': '1-0-2000'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        response = requests.get(url, cookies=cookies, headers=headers, timeout=10)
+        response = requests.get(url, cookies=cookies, headers=headers, timeout=5)
         if response.status_code != 200: return None
         
         soup = BeautifulSoup(response.text, 'html.parser')
+        content_div = soup.select_one('.event_body') or soup.select_one('#news_detail_body')
         
-        # 1. 본문 찾기 (여러 클래스 시도)
-        content_div = soup.select_one('.event_body') or soup.select_one('#news_detail_body') or soup.select_one('.clan_announcement_body')
-        
-        if not content_div:
-            return None
-
-        # 2. 텍스트 추출
-        text = content_div.get_text(separator="\n", strip=True)
-        # 너무 긴 문단 정리
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        clean_text = "\n\n".join(lines[:10]) # 앞부분 10줄만 가져오기 (요약)
-
-        # 3. 유튜브 ID 찾기 (iframe 또는 data 속성)
-        youtube_id = None
-        # 방법 A: iframe src에서 찾기
-        iframe = content_div.find('iframe', src=re.compile('youtube'))
-        if iframe:
-            match = re.search(r'embed/([a-zA-Z0-9_-]+)', iframe['src'])
-            if match: youtube_id = match.group(1)
-        
-        # 방법 B: 스팀 전용 태그에서 찾기
-        if not youtube_id:
-            yt_div = content_div.find('div', attrs={'data-youtube-video-id': True})
-            if yt_div: youtube_id = yt_div['data-youtube-video-id']
-
-        # 4. 상점 링크(Sale Page) 찾기
-        store_link = None
-        # "상점", "세일", "Fest" 등이 포함된 링크 우선 검색
-        links = content_div.find_all('a', href=True)
-        for link in links:
-            href = link['href']
-            # 세일 페이지 특징 (/sale/ 또는 /fests/)
-            if "/sale/" in href or "/fests/" in href or "/category/" in href:
-                store_link = href
-                break 
-
-        return {
-            "text": clean_text,
-            "youtube_id": youtube_id,
-            "store_link": store_link
-        }
-
-    except Exception as e:
-        print(f"❌ 크롤링 에러: {e}")
-        return None
+        if content_div:
+            return content_div.get_text(separator="\n", strip=True)
+    except:
+        pass
+    return None
 
 def fetch_steam_sales_news():
     print("📡 스팀 뉴스 API 스캔 중...")
@@ -118,8 +112,6 @@ def fetch_steam_sales_news():
     
     try:
         response = requests.get(url, timeout=10)
-        if response.status_code != 200: return []
-        
         data = response.json()
         news_items = data['appnews']['newsitems']
         
@@ -127,74 +119,72 @@ def fetch_steam_sales_news():
         for item in news_items:
             title = item['title']
             
-            # 키워드 필터링
             if any(k.lower() in title.lower() for k in EXCLUDE_KEYWORDS): continue
             
             if any(k.lower() in title.lower() for k in KEYWORDS):
-                print(f"🎉 타겟 발견: {title}")
+                print(f"🎉 발견: {title}")
+                raw_content = item.get('contents', '')
+                news_url = item.get('url') or f"https://store.steampowered.com/news/app/593110/view/{item['gid']}"
+
+                # 1. [링크] 원본 데이터에서 '진짜 상점 링크' 찾기 (가장 중요!)
+                real_link = extract_best_link(raw_content)
+                if not real_link:
+                    real_link = news_url # 못 찾으면 그냥 뉴스 링크 사용
                 
-                news_url = item.get('url', '')
-                if not news_url:
-                    news_url = f"https://store.steampowered.com/news/app/593110/view/{item['gid']}"
+                # 2. [이미지] 원본 데이터에서 유튜브 ID 찾기
+                youtube_id = extract_youtube_id(raw_content)
                 
-                # --- [크롤링 시도] ---
-                scraped = scrape_steam_page(news_url)
+                # 3. [텍스트] 한국어 설명 만들기
+                # (A) 크롤링 먼저 시도
+                korean_text = scrape_official_korean(news_url)
                 
-                # 기본값 설정
-                final_desc = clean_fallback_text(item.get('contents', ''))[:200]
-                final_link = news_url
-                final_youtube = None
-                
-                if scraped:
-                    print("✅ 크롤링 성공! 데이터를 덮어씁니다.")
-                    if scraped['text']: final_desc = scraped['text'][:300] + "..." # 길이 제한
-                    if scraped['store_link']: final_link = scraped['store_link']
-                    if scraped['youtube_id']: final_youtube = scraped['youtube_id']
-                else:
-                    print("⚠️ 크롤링 실패. API 원본 데이터를 청소해서 사용합니다.")
+                # (B) 크롤링 실패 시 -> 원본 청소 후 번역기 가동
+                if not korean_text or len(korean_text) < 10:
+                    print("⚠️ 크롤링 실패/차단됨 -> 번역기 모드로 전환")
+                    clean_english = clean_raw_text(raw_content)
+                    korean_text = translate_to_korean(clean_english)
+
+                # 4. 제목도 번역
+                korean_title = translate_to_korean(title)
+
+                # 최종 정리 (길이 제한)
+                if len(korean_text) > 250: korean_text = korean_text[:250] + "..."
 
                 sales_news.append({
                     "id": item['gid'],
-                    "title": title,
-                    "desc": final_desc,
-                    "link": final_link,
-                    "youtube_id": final_youtube,
+                    "title": korean_title,
+                    "desc": korean_text,
+                    "link": real_link,  # 추출한 진짜 링크
+                    "youtube_id": youtube_id,
                     "date": item['date']
                 })
         
         return sales_news[::-1]
         
     except Exception as e:
-        print(f"❌ 전체 로직 에러: {e}")
+        print(f"❌ 에러: {e}")
         return []
 
 def send_discord_alert(news):
-    print(f"🚀 디스코드 전송: {news['title']}")
-    try:
-        webhook = DiscordWebhook(url=WEBHOOK_URL)
-        
-        # 제목에 "축제" 느낌 추가
-        embed = DiscordEmbed(
-            title=f"🎪 {news['title']}",
-            description=f"{news['desc']}\n\n[👉 축제 상점 페이지 바로가기]({news['link']})",
-            color='FFD700'
-        )
-        
-        # 이미지 설정
-        if news['youtube_id']:
-            # 유튜브 썸네일 (가장 깔끔)
-            embed.set_image(url=f"https://img.youtube.com/vi/{news['youtube_id']}/maxresdefault.jpg")
-        else:
-            # 스팀 로고
-            embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/2048px-Steam_icon_logo.svg.png")
-        
-        webhook.add_embed(embed)
-        webhook.execute()
-    except Exception as e:
-        print(f"❌ 전송 실패: {e}")
+    print(f"🚀 전송: {news['title']}")
+    webhook = DiscordWebhook(url=WEBHOOK_URL)
+    
+    embed = DiscordEmbed(
+        title=f"🎪 {news['title']}",
+        description=f"{news['desc']}\n\n[👉 축제 상점 페이지 바로가기]({news['link']})",
+        color='FFD700'
+    )
+    
+    if news['youtube_id']:
+        embed.set_image(url=f"https://img.youtube.com/vi/{news['youtube_id']}/maxresdefault.jpg")
+    else:
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/2048px-Steam_icon_logo.svg.png")
+    
+    webhook.add_embed(embed)
+    webhook.execute()
 
 def run():
-    print("--- 스팀 세일 봇 (최종 수정판) ---")
+    print("--- 스팀 세일 봇 (하이브리드 버전) ---")
     history = load_history()
     sales_news = fetch_steam_sales_news()
     
@@ -210,7 +200,7 @@ def run():
             
     if msg_count > 0:
         save_history(updated_history)
-        print("전송 완료.")
+        print("완료.")
     else:
         print("새로운 소식 없음.")
 

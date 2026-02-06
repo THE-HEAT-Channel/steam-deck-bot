@@ -26,6 +26,7 @@ jobs:
           pip install requests discord-webhook
           # requests, discord-webhook, beautifulsoup4(웹 크롤링용) 설치
           pip install requests discord-webhook beautifulsoup4
+          pip install requests discord-webhook beautifulsoup4 deep-translator
 
       - name: Run sales check script
         env:
