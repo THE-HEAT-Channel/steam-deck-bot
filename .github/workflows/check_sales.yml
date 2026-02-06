@@ -24,8 +24,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install requests discord-webhook
-          # deep-translator 추가 (한국어 번역용)
-          pip install requests discord-webhook deep-translator
+          # requests, discord-webhook, beautifulsoup4(웹 크롤링용) 설치
+          pip install requests discord-webhook beautifulsoup4
 
       - name: Run sales check script
         env:
