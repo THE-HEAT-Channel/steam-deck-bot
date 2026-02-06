@@ -6,11 +6,7 @@ import re
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # ================= 설정 =================
-# 세일 알림용 웹훅 주소를 따로 쓰셔도 되고, 기존 것을 쓰셔도 됩니다.
-# 여기서는 'DISCORD_WEBHOOK_SALES'라는 이름의 환경변수를 사용한다고 가정합니다.
 WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_SALES')
-
-# 만약 별도 웹훅을 안 만들었다면, 기존 'DISCORD_WEBHOOK'을 쓰도록 자동 대치
 if not WEBHOOK_URL:
     WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK')
 
@@ -20,13 +16,11 @@ if not WEBHOOK_URL:
 
 HISTORY_FILE = "sent_sales.json"
 
-# 🔥 감시할 키워드 (이 단어가 제목에 있어야 알림을 보냄)
 KEYWORDS = [
-    "Sale", "Fest", "Festival", "Edition", # 영문 키워드
-    "세일", "축제", "페스티벌", "대전", "할인", "넥스트 페스트" # 한글 키워드
+    "Sale", "Fest", "Festival", "Edition", 
+    "세일", "축제", "페스티벌", "대전", "할인", "넥스트 페스트"
 ]
 
-# 🚫 제외할 키워드 (사운드트랙, 단순 패치노트 등 방지)
 EXCLUDE_KEYWORDS = ["Soundtrack", "OST", "Patch", "Hotfix"]
 # =======================================
 
@@ -39,12 +33,37 @@ def load_history():
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
-        # 최근 50개만 저장
         if len(history) > 50: history = history[-50:]
         json.dump(history, f, ensure_ascii=False)
 
+def clean_steam_text(text):
+    """스팀의 지저분한 BBCode 태그를 정리하고, 유튜브 ID를 추출합니다."""
+    video_id = None
+    
+    # 1. 유튜브 영상 태그가 있다면 ID 추출 (썸네일용)
+    # 예: [previewyoutube=4P-0Ol3scWk;full]
+    yt_match = re.search(r'\[previewyoutube=([a-zA-Z0-9_-]+);', text)
+    if yt_match:
+        video_id = yt_match.group(1)
+
+    # 2. 태그 정리
+    # [previewyoutube] 전체 제거
+    text = re.sub(r'\[previewyoutube=.*?\]\[/previewyoutube\]', '', text)
+    # [p], [br] -> 줄바꿈
+    text = text.replace('[p]', '\n').replace('[/p]', '').replace('[br]', '\n')
+    # [list], [*] -> 목록 스타일
+    text = text.replace('[list]', '').replace('[/list]', '').replace('[*]', '• ')
+    # [url=...] -> 링크 텍스트만 남기기 (디스코드에서 깨짐 방지) 또는 제거
+    text = re.sub(r'\[url=.*?\](.*?)\[/url\]', r'\1', text)
+    # 나머지 [tag] 형태 모두 제거
+    text = re.sub(r'\[.*?\]', '', text)
+    
+    # 3. 다중 공백 및 줄바꿈 정리
+    text = re.sub(r'\n\s*\n', '\n\n', text).strip()
+    
+    return text, video_id
+
 def fetch_steam_sales_news():
-    # AppID 593110은 스팀 공식 뉴스 채널입니다.
     url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=593110&count=10&format=json"
     
     try:
@@ -57,33 +76,32 @@ def fetch_steam_sales_news():
         sales_news = []
         for item in news_items:
             title = item['title']
+            raw_content = item.get('contents', '')
             
-            # 1. 제외 키워드 확인
             if any(k.lower() in title.lower() for k in EXCLUDE_KEYWORDS):
                 continue
 
-            # 2. 포함 키워드 확인 (세일, 페스티벌 등)
             if any(k.lower() in title.lower() for k in KEYWORDS):
-                
-                # 링크 처리: url이 없으면 기본 뉴스 페이지로
                 link = item.get('url', '')
                 if not link:
                     link = f"https://store.steampowered.com/news/app/593110/view/{item['gid']}"
                 
-                # 본문 내용 미리보기 (HTML 태그 제거)
-                content = item.get('contents', '')
-                # 정규식으로 HTML 태그 제거 및 길이 제한
-                clean_content = re.sub('<[^<]+?>', '', content)[:150] + "..."
+                # 텍스트 정리 및 비디오 ID 추출
+                cleaned_desc, vid_id = clean_steam_text(raw_content)
+                
+                # 설명이 너무 길면 자르기
+                if len(cleaned_desc) > 200:
+                    cleaned_desc = cleaned_desc[:200] + "..."
 
                 sales_news.append({
                     "id": item['gid'],
                     "title": title,
                     "link": link,
-                    "desc": clean_content,
+                    "desc": cleaned_desc,
+                    "video_id": vid_id, # 유튜브 ID 추가
                     "date": item['date']
                 })
         
-        # 최신순 정렬 되어있으므로 뒤집어서 과거->현재 순으로 처리
         return sales_news[::-1]
         
     except Exception as e:
@@ -96,18 +114,23 @@ def send_discord_alert(news):
     embed = DiscordEmbed(
         title=f"💸 스팀 세일&축제 예고: {news['title']}",
         description=f"{news['desc']}\n\n[👉 이벤트 페이지 바로가기]({news['link']})",
-        color='FFD700' # 금색 (특별함 강조)
+        color='FFD700'
     )
     
-    # 이미지: 스팀 공식 뉴스 썸네일은 API가 직접 안 주므로, 기본 '세일' 느낌의 이미지를 넣거나 생략
-    # 여기선 깔끔하게 텍스트 위주로 가거나, 스팀 로고 사용
-    embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/2048px-Steam_icon_logo.svg.png")
+    # [이미지 처리 로직]
+    if news['video_id']:
+        # 1순위: 유튜브 썸네일이 있으면 그걸 사용 (가장 깔끔함)
+        img_url = f"https://img.youtube.com/vi/{news['video_id']}/maxresdefault.jpg"
+        embed.set_image(url=img_url)
+    else:
+        # 2순위: 없으면 스팀 기본 로고 (썸네일로 작게 표시)
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/2048px-Steam_icon_logo.svg.png")
     
     webhook.add_embed(embed)
     webhook.execute()
 
 def run():
-    print("🛒 스팀 세일/축제 감시 시작...")
+    print("🛒 스팀 세일/축제 감시 시작 (텍스트 정리 버전)...")
     history = load_history()
     sales_news = fetch_steam_sales_news()
     
@@ -124,9 +147,3 @@ def run():
             
     if msg_count > 0:
         save_history(updated_history)
-        print("전송 완료.")
-    else:
-        print("새로운 세일 소식 없음.")
-
-if __name__ == "__main__":
-    run()
