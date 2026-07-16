@@ -47,21 +47,29 @@ def parse_compat_status(html_text, device_names):
     for dev in device_names:
         dev_lower = dev.lower()
         start = 0
+        found_status = "Unknown"
         while True:
             idx = clean_text.find(dev_lower, start)
             if idx == -1: break
             
-            search_area = clean_text[idx:idx+300]
+            # HTML 구조가 길어질 것을 대비해 탐색 범위를 1500자로 대폭 확장
+            search_area = clean_text[idx:idx+1500]
             
-            # 스팀 머신/OS 등 변형된 표현들을 모두 포괄하도록 매칭
             if any(k in search_area for k in ["완벽 호환", "완벽하게 실행", "verified"]):
-                return "Verified"
+                found_status = "Verified"
+                break
             if any(k in search_area for k in ["플레이 가능", "호환 가능", "원활하게 실행", "playable"]):
-                return "Playable"
+                found_status = "Playable"
+                break
             if any(k in search_area for k in ["지원 안 됨", "지원되지 않음", "unsupported"]):
-                return "Unsupported"
+                found_status = "Unsupported"
+                break
             
             start = idx + len(dev_lower)
+            
+        if found_status != "Unknown":
+            return found_status
+            
     return "Unknown"
 
 def fetch_top_games():
@@ -69,6 +77,7 @@ def fetch_top_games():
     games = []
     for page in range(PAGES_TO_SCAN):
         start_count = page * 50
+        # 🌟 핵심: 검색 페이지 언어 및 지역 강제 고정
         url = f"https://store.steampowered.com/search/?sort_by=Reviews_DESC&category1=998&l=koreana&cc=kr&start={start_count}"
         
         try:
@@ -132,13 +141,15 @@ def fetch_top_games():
 
 def fetch_compatibilities_for_game(appid):
     """개별 상점 페이지를 로드해 3가지 항목의 상태를 가져옵니다."""
-    url = f"https://store.steampowered.com/app/{appid}/?l=koreana"
+    # 🌟 핵심: 상점 페이지 URL 언어 및 지역 강제 고정
+    url = f"https://store.steampowered.com/app/{appid}/?l=koreana&cc=kr"
     
-    # 성인용 게임 접근 우회를 위한 필수 쿠키
+    # 🌟 핵심: 성인용 게임 우회 및 언어를 한국어로 완전 고정하는 쿠키 세트
     cookies = {
         'birthtime': '946684801', 
         'lastagecheckage': '1-0-2000',
-        'wants_mature_content': '1'  
+        'wants_mature_content': '1',
+        'Steam_Language': 'koreana'
     }
     
     try:
@@ -146,9 +157,9 @@ def fetch_compatibilities_for_game(appid):
         html_text = response.text
         
         return {
-            "deck": parse_compat_status(html_text, ["Steam Deck", "steamdeck"]),
-            "machine": parse_compat_status(html_text, ["Steam Machine", "steammachine"]),
-            "os": parse_compat_status(html_text, ["SteamOS", "steamos", "Steam OS"])
+            "deck": parse_compat_status(html_text, ["steam deck", "steamdeck"]),
+            "machine": parse_compat_status(html_text, ["steam machine", "steammachine"]),
+            "os": parse_compat_status(html_text, ["steamos", "steam os"])
         }
     except:
         return {"deck": "Unknown", "machine": "Unknown", "os": "Unknown"}
@@ -196,15 +207,15 @@ def run():
     unique_games = {g['id']: g for g in top_games}
     
     # [1. 기존 구버전 데이터 강제 업데이트 로직]
-    # history에 단일 문자열로 저장된 예전 게임들을 찾아 API로 뼈대 정보를 가져옵니다.
     old_appids = [appid for appid, status in history.items() if isinstance(status, str)]
     for appid in old_appids:
         if appid not in unique_games:
             try:
-                res = requests.get(f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana", timeout=5).json()
+                # 🌟 핵심: API 호출 시에도 cc=kr을 추가하여 원화(₩) 가격과 한국어 타이틀 반환 강제
+                res = requests.get(f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana&cc=kr", timeout=5).json()
                 if res and str(appid) in res and res[str(appid)]['success']:
                     data = res[str(appid)]['data']
-                    if data['type'] == 'game': # 확실한 게임 본편만 추가
+                    if data['type'] == 'game':
                         price = "무료"
                         if not data.get('is_free') and 'price_overview' in data:
                             price = data['price_overview']['final_formatted']
@@ -213,16 +224,15 @@ def run():
                             "title": data['name'],
                             "link": f"https://store.steampowered.com/app/{appid}/",
                             "reviews": 0,
-                            "sentiment": "기존 데이터 자동 갱신됨",
+                            "sentiment": "기존 데이터 갱신",
                             "price": price,
                             "img": data.get('header_image', '')
                         }
             except Exception as e:
                 pass
-            time.sleep(0.5) # 스팀 API 속도 제한 방지
+            time.sleep(0.5) 
 
     # [2. 이름 기반 중복 에디션/DLC 방지 로직]
-    # 이름이 짧은 순서대로 정렬하여 원본 게임(예: OneShot)이 파생작보다 먼저 처리되게 합니다.
     sorted_games = sorted(unique_games.values(), key=lambda x: len(x['title']))
     processed_base_titles = set()
     
@@ -231,16 +241,13 @@ def run():
     for game in sorted_games:
         appid = game['id']
         
-        # ':' 나 '-' 기호를 기준으로 앞부분만 추출하여 베이스 타이틀 비교
         base_title = game['title'].split(':')[0].split('-')[0].strip().lower()
         if base_title in processed_base_titles:
-            print(f"🚫 중복 에디션 스킵됨: {game['title']}")
             continue
             
         old_status = history.get(appid)
         current_status = fetch_compatibilities_for_game(appid)
         
-        # 정상적으로 처리가 되면 베이스 타이틀을 기록
         processed_base_titles.add(base_title)
         
         if not old_status:
