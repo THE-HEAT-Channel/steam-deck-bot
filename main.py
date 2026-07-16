@@ -39,37 +39,33 @@ def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False)
 
-def parse_compat_status(html_text, device_keywords):
-    """
-    상점 페이지에서 기기 키워드를 기반으로 호환성 상태를 탐색합니다.
-    태그나 띄어쓰기 간섭을 줄이기 위해 정규식으로 텍스트를 정리한 후 찾습니다.
-    """
-    # HTML 태그를 모두 공백으로 치환하여 순수 텍스트와 JSON 구조만 남깁니다.
+def parse_compat_status(html_text, device_names):
+    """태그와 공백을 완전히 제거하여 스팀 기기 호환성 텍스트를 정확하게 추출합니다."""
     clean_text = re.sub(r'<[^>]+>', ' ', html_text)
+    clean_text = re.sub(r'\s+', ' ', clean_text).lower()
     
-    for kw in device_keywords:
+    for dev in device_names:
+        dev_lower = dev.lower()
         start = 0
         while True:
-            idx = clean_text.find(kw, start)
+            idx = clean_text.find(dev_lower, start)
             if idx == -1: break
             
-            # 기기 이름이 언급된 부근(약 1000자)을 소문자로 변환하여 검색
-            search_area = clean_text[idx:idx+1000].lower()
+            search_area = clean_text[idx:idx+300]
             
-            if "완벽 호환" in search_area or "verified" in search_area or "완벽하게 실행" in search_area:
+            # 스팀 머신/OS 등 변형된 표현들을 모두 포괄하도록 매칭
+            if any(k in search_area for k in ["완벽 호환", "완벽하게 실행", "verified"]):
                 return "Verified"
-            if "플레이 가능" in search_area or "호환 가능" in search_area or "playable" in search_area or "원활하게 실행" in search_area:
+            if any(k in search_area for k in ["플레이 가능", "호환 가능", "원활하게 실행", "playable"]):
                 return "Playable"
-            if "지원 안 됨" in search_area or "지원되지 않음" in search_area or "unsupported" in search_area:
+            if any(k in search_area for k in ["지원 안 됨", "지원되지 않음", "unsupported"]):
                 return "Unsupported"
             
-            # 못 찾았으면 다음 언급 위치로 이동하여 계속 탐색
-            start = idx + len(kw)
-            
+            start = idx + len(dev_lower)
     return "Unknown"
 
 def fetch_top_games():
-    """스팀 검색 페이지에서 호환성 필터 없이 최상위 인기 게임 리스트를 가져옵니다."""
+    """스팀 검색 페이지에서 최상위 인기 게임 리스트를 가져옵니다."""
     games = []
     for page in range(PAGES_TO_SCAN):
         start_count = page * 50
@@ -138,7 +134,7 @@ def fetch_compatibilities_for_game(appid):
     """개별 상점 페이지를 로드해 3가지 항목의 상태를 가져옵니다."""
     url = f"https://store.steampowered.com/app/{appid}/?l=koreana"
     
-    # 🌟 핵심: 성인/연령 제한 게임(INSIDE, Katana ZERO 등) 상점 페이지 우회를 위한 3종 쿠키
+    # 성인용 게임 접근 우회를 위한 필수 쿠키
     cookies = {
         'birthtime': '946684801', 
         'lastagecheckage': '1-0-2000',
@@ -157,7 +153,7 @@ def fetch_compatibilities_for_game(appid):
     except:
         return {"deck": "Unknown", "machine": "Unknown", "os": "Unknown"}
 
-def send_discord_alert(game, new_status, old_status=None, is_update=False):
+def send_discord_alert(game, new_status, is_update=False):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
     
     deck_info = STATUS_INFO.get(new_status['deck'], STATUS_INFO["Unknown"])
@@ -178,12 +174,7 @@ def send_discord_alert(game, new_status, old_status=None, is_update=False):
 
     if is_update:
         title = f"🔄 호환성 업데이트: {game['title']}"
-        if isinstance(old_status, str):
-            # 과거 단일 기기 상태(오류 데이터)에서 세분화된 상태로 갱신될 때 복구 안내 메시지 삽입
-            desc = f"⚠️ 기존에 잘못 안내된 정보가 3분할 기기 호환성으로 새롭게 업데이트되었습니다.\n\n{status_block}\n\n{info_block}"
-        else:
-            # 정상적인 향후 상태 변경 알림
-            desc = f"{status_block}\n\n{info_block}"
+        desc = f"{status_block}\n\n{info_block}"
         color = deck_info['color']
     else:
         title = f"{deck_info['icon']} 스팀 기기 호환성: {game['title']}"
@@ -198,18 +189,59 @@ def send_discord_alert(game, new_status, old_status=None, is_update=False):
     webhook.execute()
 
 def run():
-    print("스팀 인기 게임 세분화 호환성(Deck, Machine, OS) 갱신 중...")
+    print("스팀 인기 게임 세분화 호환성 갱신 및 기존 데이터 복구 중...")
     history = load_history()
-    
     top_games = fetch_top_games()
+    
     unique_games = {g['id']: g for g in top_games}
+    
+    # [1. 기존 구버전 데이터 강제 업데이트 로직]
+    # history에 단일 문자열로 저장된 예전 게임들을 찾아 API로 뼈대 정보를 가져옵니다.
+    old_appids = [appid for appid, status in history.items() if isinstance(status, str)]
+    for appid in old_appids:
+        if appid not in unique_games:
+            try:
+                res = requests.get(f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana", timeout=5).json()
+                if res and str(appid) in res and res[str(appid)]['success']:
+                    data = res[str(appid)]['data']
+                    if data['type'] == 'game': # 확실한 게임 본편만 추가
+                        price = "무료"
+                        if not data.get('is_free') and 'price_overview' in data:
+                            price = data['price_overview']['final_formatted']
+                        unique_games[appid] = {
+                            "id": str(appid),
+                            "title": data['name'],
+                            "link": f"https://store.steampowered.com/app/{appid}/",
+                            "reviews": 0,
+                            "sentiment": "기존 데이터 자동 갱신됨",
+                            "price": price,
+                            "img": data.get('header_image', '')
+                        }
+            except Exception as e:
+                pass
+            time.sleep(0.5) # 스팀 API 속도 제한 방지
+
+    # [2. 이름 기반 중복 에디션/DLC 방지 로직]
+    # 이름이 짧은 순서대로 정렬하여 원본 게임(예: OneShot)이 파생작보다 먼저 처리되게 합니다.
+    sorted_games = sorted(unique_games.values(), key=lambda x: len(x['title']))
+    processed_base_titles = set()
+    
     msg_count = 0
     
-    for appid, game in unique_games.items():
-        old_status = history.get(appid)
+    for game in sorted_games:
+        appid = game['id']
         
-        # 상점 페이지에 직접 들어가서 3개 항목 추출
+        # ':' 나 '-' 기호를 기준으로 앞부분만 추출하여 베이스 타이틀 비교
+        base_title = game['title'].split(':')[0].split('-')[0].strip().lower()
+        if base_title in processed_base_titles:
+            print(f"🚫 중복 에디션 스킵됨: {game['title']}")
+            continue
+            
+        old_status = history.get(appid)
         current_status = fetch_compatibilities_for_game(appid)
+        
+        # 정상적으로 처리가 되면 베이스 타이틀을 기록
+        processed_base_titles.add(base_title)
         
         if not old_status:
             if current_status['deck'] != "Unknown" or current_status['machine'] != "Unknown":
@@ -221,25 +253,23 @@ def run():
             else:
                 history[appid] = current_status
                 
-        # 기존 히스토리가 옛날 버전(오염된 문자열)이거나 새 정보와 완전히 다른 경우
         elif isinstance(old_status, str) or old_status != current_status:
             
-            # 3개 모두 Unknown으로 뜨는 경우, 스팀 페이지 일시적 로딩 오류로 간주하고 무시하여 채널 보호
             if current_status['deck'] == "Unknown" and current_status['machine'] == "Unknown" and current_status['os'] == "Unknown":
-                print(f"🛡️ 방어 발동: {game['title']} - 전체 알 수 없음(상점 HTML 로딩 오류 의심) 무시함")
+                print(f"🛡️ 방어 발동: {game['title']} - 전체 알 수 없음 무시함")
                 continue
                 
-            print(f"🔄 변경/복구: {game['title']}")
-            send_discord_alert(game, current_status, old_status=old_status, is_update=True)
+            print(f"🔄 업데이트 됨: {game['title']}")
+            send_discord_alert(game, current_status, is_update=True)
             history[appid] = current_status
             msg_count += 1
             time.sleep(1)
             
     if msg_count > 0:
         save_history(history)
-        print("저장 완료.")
+        print("모든 데이터 저장 완료.")
     else:
-        print("변경 없음.")
+        print("새로 변경된 항목 없음.")
 
 if __name__ == "__main__":
     run()
