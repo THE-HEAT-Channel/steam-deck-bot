@@ -16,9 +16,11 @@ if not WEBHOOK_URL:
 MIN_REVIEWS = 100  # 인기 게임 기준
 HISTORY_FILE = "sent_games.json"
 
+# 🌟 핵심: SteamOS 전용 '호환 가능(파란색)' 상태 추가
 STATUS_INFO = {
     "Verified": {"text": "완벽 호환", "icon": "🟢", "color": "00FF00"},
     "Playable": {"text": "플레이 가능", "icon": "🟡", "color": "FFFF00"},
+    "Compatible": {"text": "호환 가능", "icon": "🔵", "color": "0080FF"},
     "Unsupported": {"text": "지원 안 됨", "icon": "🔴", "color": "FF0000"},
     "Unknown": {"text": "알 수 없음", "icon": "❓", "color": "CCCCCC"}
 }
@@ -106,14 +108,8 @@ def fetch_top_games():
     return games
 
 def fetch_compatibilities_for_game(appid):
-    """
-    HTML 파싱을 완전히 배제하고, 스팀 내부 비공개 JSON API와 공식 API를 조합하여
-    기기별 호환성 데이터를 안전하게 수집합니다. (연령 제한 우회 및 UI 변경 면역)
-    """
+    """스팀 비공개 API를 호출하고, 유저 경험칙에 맞게 기기별 호환성을 직관적으로 배분합니다."""
     deck_status = "Unknown"
-    machine_status = "Unknown"
-    os_status = "Unknown"
-
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
     # 1. Steam Deck 호환성 (내부 비공개 AJAX API)
@@ -129,31 +125,19 @@ def fetch_compatibilities_for_game(appid):
     except:
         pass
 
-    # 2. SteamOS 및 Steam Machine 호환성 (공식 AppDetails API)
-    try:
-        app_url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana&cc=kr"
-        res = requests.get(app_url, headers=headers, timeout=5).json()
-        
-        if res and str(appid) in res and res[str(appid)].get("success"):
-            data = res[str(appid)]["data"]
-            platforms = data.get("platforms", {})
-            
-            # 리눅스/SteamOS 네이티브 지원 여부 확인
-            is_linux_native = platforms.get("linux", False)
-            
-            if is_linux_native:
-                os_status = "Verified" if deck_status == "Verified" else "Playable"
-                machine_status = "Playable"
-            else:
-                # 네이티브는 아니지만 스팀덱(Proton 호환 계층)으로 구동되는 경우
-                if deck_status == "Verified":
-                    os_status = "Playable"
-                    machine_status = "Unknown"
-                elif deck_status == "Unsupported":
-                    os_status = "Unsupported"
-                    machine_status = "Unsupported"
-    except:
-        pass
+    # 🌟 핵심: 오류가 잦았던 리눅스 검증 로직을 제거하고 직관적인 1:1 상태 매칭 적용
+    machine_status = "Unknown"
+    os_status = "Unknown"
+
+    if deck_status == "Verified":
+        machine_status = "Verified"
+        os_status = "Compatible"
+    elif deck_status == "Playable":
+        machine_status = "Playable"
+        os_status = "Compatible"
+    elif deck_status == "Unsupported":
+        machine_status = "Unsupported"
+        os_status = "Unsupported"
 
     return {"deck": deck_status, "machine": machine_status, "os": os_status}
 
@@ -193,13 +177,12 @@ def send_discord_alert(game, new_status, is_update=False):
     webhook.execute()
 
 def run():
-    print("스팀 호환성 갱신 중 (JSON API 통신 방식)...")
+    print("스팀 호환성 갱신 중 (JSON API + 논리적 매칭 패치 적용)...")
     history = load_history()
     top_games = fetch_top_games()
     
     unique_games = {g['id']: g for g in top_games}
     
-    # [1. 기존 구버전 데이터 강제 업데이트 로직]
     old_appids = [appid for appid, status in history.items() if isinstance(status, str)]
     for appid in old_appids:
         if appid not in unique_games:
@@ -224,7 +207,6 @@ def run():
                 pass
             time.sleep(0.5) 
 
-    # [2. 이름 기반 중복 에디션/DLC 방지 로직]
     sorted_games = sorted(unique_games.values(), key=lambda x: len(x['title']))
     processed_base_titles = set()
     
@@ -238,8 +220,6 @@ def run():
             continue
             
         old_status = history.get(appid)
-        
-        # 순수 JSON API로 통신하여 호환성 데이터 추출
         current_status = fetch_compatibilities_for_game(appid)
         
         processed_base_titles.add(base_title)
@@ -256,7 +236,6 @@ def run():
                 
         elif isinstance(old_status, str) or old_status != current_status:
             
-            # JSON API가 3가지 항목 모두 Unknown을 반환하는 경우는 실제 데이터가 없는 경우입니다.
             if current_status['deck'] == "Unknown" and current_status['machine'] == "Unknown" and current_status['os'] == "Unknown":
                 continue
                 
