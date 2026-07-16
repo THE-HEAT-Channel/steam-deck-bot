@@ -39,23 +39,33 @@ def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False)
 
-def parse_compat_status(html_text, target_device_name):
+def parse_compat_status(html_text, device_keywords):
     """
-    상점 페이지 HTML에서 특정 기기의 호환성 텍스트를 파싱합니다.
+    상점 페이지에서 기기 키워드를 기반으로 호환성 상태를 탐색합니다.
+    태그나 띄어쓰기 간섭을 줄이기 위해 정규식으로 텍스트를 정리한 후 찾습니다.
     """
-    idx = html_text.find(target_device_name)
-    if idx == -1:
-        return "Unknown"
-        
-    search_area = html_text[idx:idx+1500] 
+    # HTML 태그를 모두 공백으로 치환하여 순수 텍스트와 JSON 구조만 남깁니다.
+    clean_text = re.sub(r'<[^>]+>', ' ', html_text)
     
-    if "완벽 호환" in search_area or "Verified" in search_area:
-        return "Verified"
-    elif "플레이 가능" in search_area or "호환 가능" in search_area or "Playable" in search_area:
-        return "Playable"
-    elif "지원 안 됨" in search_area or "Unsupported" in search_area:
-        return "Unsupported"
-    
+    for kw in device_keywords:
+        start = 0
+        while True:
+            idx = clean_text.find(kw, start)
+            if idx == -1: break
+            
+            # 기기 이름이 언급된 부근(약 1000자)을 소문자로 변환하여 검색
+            search_area = clean_text[idx:idx+1000].lower()
+            
+            if "완벽 호환" in search_area or "verified" in search_area or "완벽하게 실행" in search_area:
+                return "Verified"
+            if "플레이 가능" in search_area or "호환 가능" in search_area or "playable" in search_area or "원활하게 실행" in search_area:
+                return "Playable"
+            if "지원 안 됨" in search_area or "지원되지 않음" in search_area or "unsupported" in search_area:
+                return "Unsupported"
+            
+            # 못 찾았으면 다음 언급 위치로 이동하여 계속 탐색
+            start = idx + len(kw)
+            
     return "Unknown"
 
 def fetch_top_games():
@@ -127,16 +137,22 @@ def fetch_top_games():
 def fetch_compatibilities_for_game(appid):
     """개별 상점 페이지를 로드해 3가지 항목의 상태를 가져옵니다."""
     url = f"https://store.steampowered.com/app/{appid}/?l=koreana"
-    cookies = {'birthtime': '946684801', 'lastagecheckage': '1-0-2000'}
+    
+    # 🌟 핵심: 성인/연령 제한 게임(INSIDE, Katana ZERO 등) 상점 페이지 우회를 위한 3종 쿠키
+    cookies = {
+        'birthtime': '946684801', 
+        'lastagecheckage': '1-0-2000',
+        'wants_mature_content': '1'  
+    }
     
     try:
         response = requests.get(url, cookies=cookies, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         html_text = response.text
         
         return {
-            "deck": parse_compat_status(html_text, "Steam Deck 호환성"),
-            "machine": parse_compat_status(html_text, "Steam Machine 호환성"),
-            "os": parse_compat_status(html_text, "SteamOS 호환성")
+            "deck": parse_compat_status(html_text, ["Steam Deck", "steamdeck"]),
+            "machine": parse_compat_status(html_text, ["Steam Machine", "steammachine"]),
+            "os": parse_compat_status(html_text, ["SteamOS", "steamos", "Steam OS"])
         }
     except:
         return {"deck": "Unknown", "machine": "Unknown", "os": "Unknown"}
