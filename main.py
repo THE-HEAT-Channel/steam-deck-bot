@@ -39,45 +39,11 @@ def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False)
 
-def parse_compat_status(html_text, device_names):
-    """태그와 공백을 완전히 제거하여 스팀 기기 호환성 텍스트를 정확하게 추출합니다."""
-    clean_text = re.sub(r'<[^>]+>', ' ', html_text)
-    clean_text = re.sub(r'\s+', ' ', clean_text).lower()
-    
-    for dev in device_names:
-        dev_lower = dev.lower()
-        start = 0
-        found_status = "Unknown"
-        while True:
-            idx = clean_text.find(dev_lower, start)
-            if idx == -1: break
-            
-            # HTML 구조가 길어질 것을 대비해 탐색 범위를 1500자로 대폭 확장
-            search_area = clean_text[idx:idx+1500]
-            
-            if any(k in search_area for k in ["완벽 호환", "완벽하게 실행", "verified"]):
-                found_status = "Verified"
-                break
-            if any(k in search_area for k in ["플레이 가능", "호환 가능", "원활하게 실행", "playable"]):
-                found_status = "Playable"
-                break
-            if any(k in search_area for k in ["지원 안 됨", "지원되지 않음", "unsupported"]):
-                found_status = "Unsupported"
-                break
-            
-            start = idx + len(dev_lower)
-            
-        if found_status != "Unknown":
-            return found_status
-            
-    return "Unknown"
-
 def fetch_top_games():
     """스팀 검색 페이지에서 최상위 인기 게임 리스트를 가져옵니다."""
     games = []
     for page in range(PAGES_TO_SCAN):
         start_count = page * 50
-        # 🌟 핵심: 검색 페이지 언어 및 지역 강제 고정
         url = f"https://store.steampowered.com/search/?sort_by=Reviews_DESC&category1=998&l=koreana&cc=kr&start={start_count}"
         
         try:
@@ -140,29 +106,56 @@ def fetch_top_games():
     return games
 
 def fetch_compatibilities_for_game(appid):
-    """개별 상점 페이지를 로드해 3가지 항목의 상태를 가져옵니다."""
-    # 🌟 핵심: 상점 페이지 URL 언어 및 지역 강제 고정
-    url = f"https://store.steampowered.com/app/{appid}/?l=koreana&cc=kr"
-    
-    # 🌟 핵심: 성인용 게임 우회 및 언어를 한국어로 완전 고정하는 쿠키 세트
-    cookies = {
-        'birthtime': '946684801', 
-        'lastagecheckage': '1-0-2000',
-        'wants_mature_content': '1',
-        'Steam_Language': 'koreana'
-    }
-    
+    """
+    HTML 파싱을 완전히 배제하고, 스팀 내부 비공개 JSON API와 공식 API를 조합하여
+    기기별 호환성 데이터를 안전하게 수집합니다. (연령 제한 우회 및 UI 변경 면역)
+    """
+    deck_status = "Unknown"
+    machine_status = "Unknown"
+    os_status = "Unknown"
+
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    # 1. Steam Deck 호환성 (내부 비공개 AJAX API)
     try:
-        response = requests.get(url, cookies=cookies, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        html_text = response.text
+        deck_url = f"https://store.steampowered.com/saleaction/ajaxgetdeckappcompatibilityreport?nAppID={appid}"
+        res = requests.get(deck_url, headers=headers, timeout=5).json()
         
-        return {
-            "deck": parse_compat_status(html_text, ["steam deck", "steamdeck"]),
-            "machine": parse_compat_status(html_text, ["steam machine", "steammachine"]),
-            "os": parse_compat_status(html_text, ["steamos", "steam os"])
-        }
+        if res and res.get("success") == 1:
+            category = res.get("results", {}).get("resolved_category")
+            if category == 3: deck_status = "Verified"
+            elif category == 2: deck_status = "Playable"
+            elif category == 1: deck_status = "Unsupported"
     except:
-        return {"deck": "Unknown", "machine": "Unknown", "os": "Unknown"}
+        pass
+
+    # 2. SteamOS 및 Steam Machine 호환성 (공식 AppDetails API)
+    try:
+        app_url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana&cc=kr"
+        res = requests.get(app_url, headers=headers, timeout=5).json()
+        
+        if res and str(appid) in res and res[str(appid)].get("success"):
+            data = res[str(appid)]["data"]
+            platforms = data.get("platforms", {})
+            
+            # 리눅스/SteamOS 네이티브 지원 여부 확인
+            is_linux_native = platforms.get("linux", False)
+            
+            if is_linux_native:
+                os_status = "Verified" if deck_status == "Verified" else "Playable"
+                machine_status = "Playable"
+            else:
+                # 네이티브는 아니지만 스팀덱(Proton 호환 계층)으로 구동되는 경우
+                if deck_status == "Verified":
+                    os_status = "Playable"
+                    machine_status = "Unknown"
+                elif deck_status == "Unsupported":
+                    os_status = "Unsupported"
+                    machine_status = "Unsupported"
+    except:
+        pass
+
+    return {"deck": deck_status, "machine": machine_status, "os": os_status}
 
 def send_discord_alert(game, new_status, is_update=False):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
@@ -200,7 +193,7 @@ def send_discord_alert(game, new_status, is_update=False):
     webhook.execute()
 
 def run():
-    print("스팀 인기 게임 세분화 호환성 갱신 및 기존 데이터 복구 중...")
+    print("스팀 호환성 갱신 중 (JSON API 통신 방식)...")
     history = load_history()
     top_games = fetch_top_games()
     
@@ -211,7 +204,6 @@ def run():
     for appid in old_appids:
         if appid not in unique_games:
             try:
-                # 🌟 핵심: API 호출 시에도 cc=kr을 추가하여 원화(₩) 가격과 한국어 타이틀 반환 강제
                 res = requests.get(f"https://store.steampowered.com/api/appdetails?appids={appid}&l=koreana&cc=kr", timeout=5).json()
                 if res and str(appid) in res and res[str(appid)]['success']:
                     data = res[str(appid)]['data']
@@ -246,6 +238,8 @@ def run():
             continue
             
         old_status = history.get(appid)
+        
+        # 순수 JSON API로 통신하여 호환성 데이터 추출
         current_status = fetch_compatibilities_for_game(appid)
         
         processed_base_titles.add(base_title)
@@ -262,8 +256,8 @@ def run():
                 
         elif isinstance(old_status, str) or old_status != current_status:
             
+            # JSON API가 3가지 항목 모두 Unknown을 반환하는 경우는 실제 데이터가 없는 경우입니다.
             if current_status['deck'] == "Unknown" and current_status['machine'] == "Unknown" and current_status['os'] == "Unknown":
-                print(f"🛡️ 방어 발동: {game['title']} - 전체 알 수 없음 무시함")
                 continue
                 
             print(f"🔄 업데이트 됨: {game['title']}")
