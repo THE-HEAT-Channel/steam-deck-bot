@@ -2,7 +2,7 @@ import requests
 import json
 import os
 import time
-import random
+import re
 from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
@@ -16,7 +16,6 @@ if not WEBHOOK_URL:
 MIN_REVIEWS = 100  # 인기 게임 기준
 HISTORY_FILE = "sent_games.json"
 
-# [핵심] 4가지 등급 + 한국어 표기 + 아이콘
 STATUS_INFO = {
     "Verified": {"text": "완벽 호환", "icon": "🟢", "color": "00FF00"},
     "Playable": {"text": "플레이 가능", "icon": "🟡", "color": "FFFF00"},
@@ -24,7 +23,6 @@ STATUS_INFO = {
     "Unknown": {"text": "알 수 없음", "icon": "❓", "color": "CCCCCC"}
 }
 
-# 검색할 페이지 수 (안전하게 2페이지)
 PAGES_TO_SCAN = 2 
 # ==================================================
 
@@ -32,10 +30,7 @@ def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding='utf-8') as f:
             try:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return {str(appid): "Unknown" for appid in data}
-                return data
+                return json.load(f)
             except:
                 return {}
     return {}
@@ -44,13 +39,31 @@ def save_history(history):
     with open(HISTORY_FILE, "w", encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False)
 
-def fetch_games_by_status(status_name, category_code):
-    games = []
+def parse_compat_status(html_text, target_device_name):
+    """
+    상점 페이지 HTML에서 특정 기기의 호환성 텍스트를 파싱합니다.
+    """
+    idx = html_text.find(target_device_name)
+    if idx == -1:
+        return "Unknown"
+        
+    search_area = html_text[idx:idx+1500] 
     
+    if "완벽 호환" in search_area or "Verified" in search_area:
+        return "Verified"
+    elif "플레이 가능" in search_area or "호환 가능" in search_area or "Playable" in search_area:
+        return "Playable"
+    elif "지원 안 됨" in search_area or "Unsupported" in search_area:
+        return "Unsupported"
+    
+    return "Unknown"
+
+def fetch_top_games():
+    """스팀 검색 페이지에서 호환성 필터 없이 최상위 인기 게임 리스트를 가져옵니다."""
+    games = []
     for page in range(PAGES_TO_SCAN):
         start_count = page * 50
-        # 인기순(Reviews_DESC) 정렬
-        url = f"https://store.steampowered.com/search/?sort_by=Reviews_DESC&category1=998&deck_compatibility={category_code}&l=koreana&cc=kr&start={start_count}"
+        url = f"https://store.steampowered.com/search/?sort_by=Reviews_DESC&category1=998&l=koreana&cc=kr&start={start_count}"
         
         try:
             response = requests.get(url, timeout=10)
@@ -82,7 +95,6 @@ def fetch_games_by_status(status_name, category_code):
                     if not img_url:
                         img_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
                     
-                    # 리뷰 수 파싱
                     review_count = 0
                     review_sentiment = "평가 없음"
                     review_summary = row.select_one(".search_review_summary")
@@ -90,7 +102,6 @@ def fetch_games_by_status(status_name, category_code):
                         raw_tooltip = review_summary.get('data-tooltip-html', '')
                         parts = raw_tooltip.split('<br>')
                         if parts: review_sentiment = parts[0].strip()
-                        import re
                         match = re.search(r'([0-9,]+)개', raw_tooltip)
                         if match: review_count = int(match.group(1).replace(',', ''))
                     
@@ -106,7 +117,6 @@ def fetch_games_by_status(status_name, category_code):
                             "reviews": review_count,
                             "sentiment": review_sentiment,
                             "price": price_text,
-                            "status": status_name,
                             "img": img_url
                         })
                 except: continue
@@ -114,11 +124,35 @@ def fetch_games_by_status(status_name, category_code):
         except: break
     return games
 
-def send_discord_alert(game, is_update=False, old_status=None):
+def fetch_compatibilities_for_game(appid):
+    """개별 상점 페이지를 로드해 3가지 항목의 상태를 가져옵니다."""
+    url = f"https://store.steampowered.com/app/{appid}/?l=koreana"
+    cookies = {'birthtime': '946684801', 'lastagecheckage': '1-0-2000'}
+    
+    try:
+        response = requests.get(url, cookies=cookies, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        html_text = response.text
+        
+        return {
+            "deck": parse_compat_status(html_text, "Steam Deck 호환성"),
+            "machine": parse_compat_status(html_text, "Steam Machine 호환성"),
+            "os": parse_compat_status(html_text, "SteamOS 호환성")
+        }
+    except:
+        return {"deck": "Unknown", "machine": "Unknown", "os": "Unknown"}
+
+def send_discord_alert(game, new_status, old_status=None, is_update=False):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
     
-    # 현재 상태 정보 가져오기
-    curr_info = STATUS_INFO.get(game['status'], STATUS_INFO["Unknown"])
+    deck_info = STATUS_INFO.get(new_status['deck'], STATUS_INFO["Unknown"])
+    machine_info = STATUS_INFO.get(new_status['machine'], STATUS_INFO["Unknown"])
+    os_info = STATUS_INFO.get(new_status['os'], STATUS_INFO["Unknown"])
+    
+    status_block = (
+        f"🎮 **Steam Deck:** {deck_info['icon']} {deck_info['text']}\n"
+        f"🖥️ **Steam Machine:** {machine_info['icon']} {machine_info['text']}\n"
+        f"🐧 **SteamOS:** {os_info['icon']} {os_info['text']}"
+    )
     
     info_block = (
         f"**가격:** {game['price']}\n"
@@ -127,23 +161,18 @@ def send_discord_alert(game, is_update=False, old_status=None):
     )
 
     if is_update:
-        # [핵심] 변경일 경우: A -> B 형식으로 표시
-        old_info = STATUS_INFO.get(old_status, STATUS_INFO["Unknown"])
-        
-        title = f"🔄 호환성 등급 변경: {game['title']}"
-        desc = (
-            f"**{old_info['icon']} {old_info['text']}**"
-            f"  ➔  "
-            f"**{curr_info['icon']} {curr_info['text']}**\n\n"
-            f"{info_block}"
-        )
-        color = curr_info['color']
-        
+        title = f"🔄 호환성 업데이트: {game['title']}"
+        if isinstance(old_status, str):
+            # 과거 단일 기기 상태(오류 데이터)에서 세분화된 상태로 갱신될 때 복구 안내 메시지 삽입
+            desc = f"⚠️ 기존에 잘못 안내된 정보가 3분할 기기 호환성으로 새롭게 업데이트되었습니다.\n\n{status_block}\n\n{info_block}"
+        else:
+            # 정상적인 향후 상태 변경 알림
+            desc = f"{status_block}\n\n{info_block}"
+        color = deck_info['color']
     else:
-        # 신규 발견일 경우
-        title = f"{curr_info['icon']} 스팀덱 호환성 확인: {game['title']}"
-        desc = f"**현재 상태: {curr_info['text']}**\n\n{info_block}"
-        color = curr_info['color']
+        title = f"{deck_info['icon']} 스팀 기기 호환성: {game['title']}"
+        desc = f"{status_block}\n\n{info_block}"
+        color = deck_info['color']
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if game.get('img'):
@@ -153,51 +182,39 @@ def send_discord_alert(game, is_update=False, old_status=None):
     webhook.execute()
 
 def run():
-    print("스팀덱 게임 호환성 체크 중 (4등급)...")
+    print("스팀 인기 게임 세분화 호환성(Deck, Machine, OS) 갱신 중...")
     history = load_history()
     
-    # 4가지 카테고리 모두 스캔 (Unknown=0, Unsupported=1, Playable=2, Verified=3)
-    target_categories = [
-        ("Verified", 3),
-        ("Playable", 2),
-        ("Unsupported", 1),
-        ("Unknown", 0)
-    ]
-    
-    all_fetched_games = []
-    for status_name, code in target_categories:
-        games = fetch_games_by_status(status_name, code)
-        all_fetched_games.extend(games)
-        time.sleep(1)
-    
-    unique_games = {g['id']: g for g in all_fetched_games}
+    top_games = fetch_top_games()
+    unique_games = {g['id']: g for g in top_games}
     msg_count = 0
     
-    for game in unique_games.values():
-        appid = game['id']
-        current_status = game['status']
+    for appid, game in unique_games.items():
+        old_status = history.get(appid)
         
-        # 1. 신규 발견 (Unknown 제외하고 알림)
-        if appid not in history:
-            if current_status != "Unknown": 
+        # 상점 페이지에 직접 들어가서 3개 항목 추출
+        current_status = fetch_compatibilities_for_game(appid)
+        
+        if not old_status:
+            if current_status['deck'] != "Unknown" or current_status['machine'] != "Unknown":
                 print(f"✨ 신규: {game['title']}")
-                send_discord_alert(game, is_update=False)
+                send_discord_alert(game, current_status, is_update=False)
+                history[appid] = current_status
                 msg_count += 1
                 time.sleep(1)
-            history[appid] = current_status
+            else:
+                history[appid] = current_status
+                
+        # 기존 히스토리가 옛날 버전(오염된 문자열)이거나 새 정보와 완전히 다른 경우
+        elif isinstance(old_status, str) or old_status != current_status:
             
-        # 2. 상태 변경 (이전 기록과 다르면)
-        elif history[appid] != current_status:
-            old_status = history[appid]
-            
-            # 기존 상태가 좋았는데(Verified/Playable), 갑자기 Unknown이 되면 무시(continue)합니다.
-            if current_status == "Unknown" and old_status in ["Verified", "Playable"]:
-                print(f"🛡️ 방어 발동: {game['title']} ({old_status} -> Unknown) - 일시적 오류 무시함")
+            # 3개 모두 Unknown으로 뜨는 경우, 스팀 페이지 일시적 로딩 오류로 간주하고 무시하여 채널 보호
+            if current_status['deck'] == "Unknown" and current_status['machine'] == "Unknown" and current_status['os'] == "Unknown":
+                print(f"🛡️ 방어 발동: {game['title']} - 전체 알 수 없음(상점 HTML 로딩 오류 의심) 무시함")
                 continue
-            
-            # --- 아래는 기존 코드 그대로 ---
-            print(f"🔄 변경: {game['title']} ({old_status} -> {current_status})")
-            send_discord_alert(game, is_update=True, old_status=old_status)
+                
+            print(f"🔄 변경/복구: {game['title']}")
+            send_discord_alert(game, current_status, old_status=old_status, is_update=True)
             history[appid] = current_status
             msg_count += 1
             time.sleep(1)
