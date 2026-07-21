@@ -29,6 +29,7 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False)
 
 def translate_ko(text):
+    """NoneType 에러를 방지하고 영어 원문을 한글로 안전하게 번역합니다."""
     if not text:
         return ""
     
@@ -44,6 +45,7 @@ def translate_ko(text):
         return text_str
 
 def parse_main_table():
+    """마크다운 원본에서 기호나 빈칸을 스킵하고 순수 게임 정보만 추출합니다."""
     url = f"{BASE_WIKI_URL}/Compatibility-List.md"
     try:
         res = requests.get(url, timeout=10)
@@ -53,11 +55,8 @@ def parse_main_table():
         games = {}
         
         for line in lines:
-            # 1. 표(Table)의 형태(| 기호로 시작)가 아니면 무시
             if not line.strip().startswith('|'):
                 continue
-                
-            # 2. 마크다운 표의 구분선 행(|---|---| 등) 완벽 차단
             if re.search(r'\|[-:\s]+\|[-:\s]+\|', line):
                 continue
                 
@@ -68,11 +67,8 @@ def parse_main_table():
                 native_api = cols[2]
                 anti_cheat = cols[3]
                 
-                # 3. 헤더/범례 가이드라인 행 차단
                 if "GAME NAME" in raw_game.upper() or "✔" in status or "Game" in raw_game:
                     continue
-                    
-                # 4. 방어 로직: 이름이 비어있거나 - 기호로만 된 경우 차단
                 if not raw_game or all(c in '-:' for c in raw_game):
                     continue
                 
@@ -97,12 +93,13 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    if not link: return {"image": "", "notes": ""}
+    """상세 페이지에 접속해 이미지, 노트, 그리고 DLL(dxgi/winmm) 정보를 추출합니다."""
+    if not link: return {"image": "", "notes": "", "dll": ""}
     
     url = f"{BASE_WIKI_URL}/{link}.md"
     try:
         res = requests.get(url, timeout=10)
-        if res.status_code != 200: return {"image": "", "notes": ""}
+        if res.status_code != 200: return {"image": "", "notes": "", "dll": ""}
         
         text = res.text
         image_url = ""
@@ -110,53 +107,96 @@ def fetch_detail_page(link):
         if img_match:
             image_url = img_match.group(1)
             
+        # 상세 페이지 내용 중 DLL 파일명 스캔
+        found_dlls = []
+        if re.search(r'\bdxgi(?:\.dll)?\b', text, re.IGNORECASE):
+            found_dlls.append("dxgi.dll")
+        if re.search(r'\bwinmm(?:\.dll)?\b', text, re.IGNORECASE):
+            found_dlls.append("winmm.dll")
+            
+        dll_text = " 또는 ".join(found_dlls)
+            
         clean_text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
         clean_text = clean_text.replace('#', '').strip()
         
         if len(clean_text) > 400:
             clean_text = clean_text[:400] + "...\n(상세 페이지 참조)"
             
-        return {"image": image_url, "notes": clean_text}
+        return {"image": image_url, "notes": clean_text, "dll": dll_text}
     except:
-        return {"image": "", "notes": ""}
+        return {"image": "", "notes": "", "dll": ""}
 
 def send_discord_alert(game, old_game=None, is_update=False):
+    """디스코드 알림을 포맷팅하여 전송합니다. (인게임 설정 예상 로직 포함)"""
     webhook = DiscordWebhook(url=WEBHOOK_URL)
     
-    status_lower = game['status'].lower()
-    if 'working' in status_lower and 'not' not in status_lower:
+    status_raw = game['status']
+    
+    if 'working' in status_raw.lower() or '✔' in status_raw:
         icon = "🟢"
         color = '00FF00'
-    elif 'issue' in status_lower:
+        ko_status = "완벽 작동"
+    elif 'issue' in status_raw.lower() or '⚠' in status_raw:
         icon = "🟡"
         color = 'FFA500' 
+        ko_status = "이슈 있음 (설정 필요)"
     else:
         icon = "🔴"
         color = 'FF0000'
+        ko_status = "작동 불가"
 
     title_prefix = "🔄 상태 업데이트" if is_update else "✨ 신규 추가"
     title = f"{title_prefix}: {game['name']}"
     
-    # 🌟 업데이트 된 항목 찾아서 마크 표시 로직
     mark_status = mark_api = mark_cheat = mark_notes = ""
     if is_update and old_game:
-        if game['status'] != old_game.get('status'): mark_status = " 🔄(업데이트 됨)"
-        if game['native_api'] != old_game.get('native_api'): mark_api = " 🔄(업데이트 됨)"
-        if game['anti_cheat'] != old_game.get('anti_cheat'): mark_cheat = " 🔄(업데이트 됨)"
-        if game.get('notes') != old_game.get('notes'): mark_notes = " 🔄(노트 내용 업데이트 됨)"
+        if game['status'] != old_game.get('status'): mark_status = " 🔄"
+        if game['native_api'] != old_game.get('native_api'): mark_api = " 🔄"
+        if game['anti_cheat'] != old_game.get('anti_cheat'): mark_cheat = " 🔄"
+        if game.get('notes') != old_game.get('notes'): mark_notes = " 🔄"
 
-    ko_status = str(translate_ko(game.get('status', ''))) + mark_status
-    ko_anti_cheat = str(translate_ko(game.get('anti_cheat', ''))) + mark_cheat
-    native_api_text = str(game.get('native_api', '')) + mark_api
+    ko_status += mark_status
+    
+    ko_anti_cheat = game['anti_cheat'].strip()
+    if not ko_anti_cheat or ko_anti_cheat.lower() in ['none', 'n/a']:
+        ko_anti_cheat = "없음 (싱글플레이)" + mark_cheat
+    else:
+        ko_anti_cheat = str(translate_ko(ko_anti_cheat)) + mark_cheat
+        
+    native_api_text = str(game.get('native_api', ''))
+    
+    # 상세 페이지 기반 DLL 예상 추론 로직
+    extracted_dll = game.get('dll', '')
+    if extracted_dll:
+        target_dll = extracted_dll
+    else:
+        if 'working' in status_raw.lower() or '✔' in status_raw:
+            target_dll = "(예상) dxgi.dll 또는 winmm.dll"
+        else:
+            target_dll = "정보 없음"
+            
+    # 인게임 설정 예상 로직
+    if "DLSS" in native_api_text.upper():
+        in_game_setting = "DLSS 켜기"
+    elif "FSR" in native_api_text.upper():
+        in_game_setting = "FSR 켜기"
+    elif "XESS" in native_api_text.upper():
+        in_game_setting = "XeSS 켜기"
+    else:
+        in_game_setting = f"{native_api_text} 켜기"
+        
+    native_api_text += mark_api
     ko_notes = str(translate_ko(game.get('notes', '')))
     
-    notes_block = f"\n\n**📝 설정 노트 및 알려진 이슈 (클릭해서 보기)**{mark_notes}\n||{ko_notes}||" if ko_notes else ""
+    notes_block = f"\n\n**📝 세부 설정 및 이슈 (클릭해서 보기)**{mark_notes}\n||{ko_notes}||" if ko_notes else ""
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
     desc = (
-        f"**상태:** {icon} {ko_status}\n"
-        f"**기본 API:** {native_api_text}\n"
-        f"**안티치트:** {ko_anti_cheat}"
+        f"**호환성 상태:** {icon} **{ko_status}**\n"
+        f"**안티치트:** {ko_anti_cheat}\n\n"
+        f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
+        f"**🎮 게임 내 옵션 선택:** **{in_game_setting}**\n"
+        f"(원본 지원 API: {native_api_text})"
         f"{notes_block}\n\n"
         f"[👉 OptiScaler 깃허브 상세 페이지 바로가기]({detail_url})"
     )
@@ -176,7 +216,7 @@ def run():
     history = load_history()
     all_games = parse_main_table()
     
-    # 🌟 첫 번째 게임만 추출하여 테스트 진행
+    # 테스트를 위해 첫 번째 게임 하나만 추출
     if not all_games:
         print("게임을 불러오지 못했습니다.")
         return
@@ -190,11 +230,11 @@ def run():
     for name, data in current_games.items():
         old_data = history.get(name)
         
-        # 첫 번째 게임 무조건 알림 전송 (테스트 목적)
         print(f"테스트 전송 중: {name}")
         details = fetch_detail_page(data['detail_link'])
         data['image'] = details['image']
         data['notes'] = details['notes']
+        data['dll'] = details['dll'] # DLL 정보 저장 추가
         
         send_discord_alert(data, old_game=old_data, is_update=bool(old_data))
         history[name] = data
