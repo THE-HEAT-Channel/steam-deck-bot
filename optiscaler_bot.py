@@ -63,7 +63,6 @@ def parse_main_table():
                 native_api = cols[2]
                 anti_cheat = cols[3]
                 
-                # ✅ 기호 추가 대응
                 if "GAME NAME" in raw_game.upper() or "Game" in raw_game:
                     continue
                 if not raw_game or all(c in '-:' for c in raw_game):
@@ -71,8 +70,8 @@ def parse_main_table():
                 
                 match = re.search(r'\[(.*?)\]\((.*?)\)', raw_game)
                 if match:
-                    game_name = match.group(1)
-                    detail_link = match.group(2)
+                    game_name = match.group(1).replace('*', '').strip()
+                    detail_link = match.group(2).strip()
                 else:
                     game_name = raw_game.replace('*', '').strip()
                     detail_link = None
@@ -90,13 +89,20 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    """상세 페이지의 마크다운 표(Table)를 분석하여 정확한 설정값들을 가져옵니다."""
+    """상세 페이지 주소를 올바르게 파싱하고, 표 내부의 정확한 설정값을 가져옵니다."""
     if not link: return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
     
-    url = f"{BASE_WIKI_URL}/{link}.md"
+    # 🌟 핵심: 절대 경로, 상대 경로 상관없이 페이지 이름만 정확히 추출 (404 에러 방지)
+    page_name = link.split('/')[-1]
+    if page_name.endswith('.md'):
+        page_name = page_name[:-3]
+        
+    url = f"{BASE_WIKI_URL}/{page_name}.md"
     try:
         res = requests.get(url, timeout=10)
-        if res.status_code != 200: return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
+        # 페이지가 없으면 빈 값 반환
+        if res.status_code != 200: 
+            return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
         
         text = res.text
         image_url = ""
@@ -108,14 +114,18 @@ def fetch_detail_page(link):
         upscaler_input = ""
         fg_input = ""
         
-        # 상세 페이지 내부의 마크다운 표를 한 줄씩 읽어 키-값 매칭
+        notes_lines = []
+        
+        # 🌟 핵심: 마크다운 텍스트 한 줄씩 분석
         for line in text.split('\n'):
-            if line.strip().startswith('|'):
-                cols = [c.strip() for c in line.split('|')][1:-1]
+            line_strip = line.strip()
+            
+            # 1. 표(Table) 파싱 (Filename, Upscaler Inputs, FG Inputs 값 추출)
+            if line_strip.startswith('|'):
+                cols = [c.strip() for c in line_strip.split('|')][1:-1]
                 if len(cols) >= 2:
                     key = cols[0].lower()
-                    # `dxgi.dll` 등에 씌워진 백틱(`) 기호 제거
-                    val = cols[1].replace('`', '').strip()
+                    val = cols[1].replace('`', '').strip() # 백틱(`) 기호 제거
                     
                     if 'filename' in key:
                         extracted_dll = val
@@ -123,9 +133,18 @@ def fetch_detail_page(link):
                         upscaler_input = val
                     elif 'fg inputs' in key or 'fg input' in key:
                         fg_input = val
-            
-        clean_text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
-        clean_text = clean_text.replace('#', '').strip()
+                continue # 표의 내용은 노트에서 제외
+                
+            # 2. 이미지 태그와 제목(##)은 노트에서 제외
+            if line_strip.startswith('![') or line_strip.startswith('#'):
+                continue
+                
+            # 3. 나머지는 중요한 '이슈 및 설정 노트'로 취합
+            if line_strip:
+                notes_lines.append(line_strip)
+        
+        # 줄바꿈 유지하여 노트 완성
+        clean_text = "\n".join(notes_lines).strip()
         
         if len(clean_text) > 400:
             clean_text = clean_text[:400] + "...\n(상세 페이지 참조)"
@@ -145,7 +164,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
     
     status_raw = game['status']
     
-    # ✅ 다양한 기호 변형(✔, ✅, ⚠, ⚠️) 완벽 대응
     if 'working' in status_raw.lower() or '✔' in status_raw or '✅' in status_raw:
         icon = "🟢"
         color = '00FF00'
@@ -179,7 +197,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     native_api_text = str(game.get('native_api', ''))
     
-    # 🌟 DLL 파일 이름 추출 로직 (상세 페이지 최우선)
     extracted_dll = game.get('dll', '')
     if extracted_dll:
         target_dll = extracted_dll
@@ -189,12 +206,11 @@ def send_discord_alert(game, old_game=None, is_update=False):
         else:
             target_dll = "정보 없음"
 
-    # 🌟 업스케일링 및 FG 인풋 추출 로직
     up_input = game.get('upscaler_input', '')
     fg_input = game.get('fg_input', '')
     
     if not up_input:
-        up_input = native_api_text  # 상세 페이지 정보가 없으면 메인 표의 API를 사용
+        up_input = native_api_text 
         
     if up_input:
         up_text = f"**🎮 업스케일링 인풋:** `{up_input}`"
