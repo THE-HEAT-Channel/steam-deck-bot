@@ -4,6 +4,7 @@ import os
 import time
 import re
 import urllib.parse
+from bs4 import BeautifulSoup
 from discord_webhook import DiscordWebhook, DiscordEmbed
 from deep_translator import GoogleTranslator
 
@@ -90,87 +91,72 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    """상세 페이지 주소를 완벽하게 보정하여 404 에러를 방지합니다."""
+    """실제 깃허브 웹페이지에 접속하여 BeautifulSoup으로 테이블과 노트를 파싱합니다."""
     if not link: return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
     
-    # 1. 절대 경로 / 상대 경로 정리
     if "github.com/" in link:
         page_path = link.split('/wiki/')[-1]
     else:
         page_path = link
         
-    # 2. 앵커(#) 및 불필요한 공백 제거
     page_path = page_path.split('#')[0].strip()
-    
-    # 3. 깃허브 위키 특성상 띄어쓰기는 하이픈(-)으로 변환됨
-    page_path = page_path.replace(" ", "-")
-    
-    # 4. 확장자 중복 방지
-    if page_path.endswith('.md'):
-        page_path = page_path[:-3]
-        
-    # 5. URL 인코딩 처리 (한글이나 특수문자 깨짐 방지)
     page_path = urllib.parse.quote(page_path)
-        
-    url = f"{BASE_WIKI_URL}/{page_path}.md"
+    
+    # 🌟 마크다운 원본 대신, 사용자가 보는 "진짜 HTML 주소"로 바로 접속합니다.
+    url = f"https://github.com/optiscaler/OptiScaler/wiki/{page_path}"
     
     try:
         res = requests.get(url, timeout=10)
-        
-        # 🌟 통신 실패 시 디스코드에서 바로 원인을 확인할 수 있도록 에러 기록
         if res.status_code != 200: 
-            error_note = f"⚠️ 상세 페이지 데이터 로드 실패 (HTTP {res.status_code})\n요청 URL: {url}"
-            return {"image": "", "notes": error_note, "dll": "", "upscaler_input": "", "fg_input": ""}
-        
-        text = res.text
-        image_url = ""
-        img_match = re.search(r'!\[.*?\]\((.*?)\)', text)
-        if img_match:
-            image_url = img_match.group(1)
+            return {"image": "", "notes": f"⚠️ 상세 페이지 데이터 로드 실패 (HTTP {res.status_code})\n요청 URL: {url}", "dll": "", "upscaler_input": "", "fg_input": ""}
             
+        soup = BeautifulSoup(res.text, 'html.parser')
+        body = soup.find('div', class_='markdown-body')
+        
         extracted_dll = ""
         upscaler_input = ""
         fg_input = ""
-        
         notes_lines = []
         
-        for line in text.split('\n'):
-            line_strip = line.strip()
-            
-            if line_strip.startswith('|'):
-                cols = [c.strip() for c in line_strip.split('|')][1:-1]
-                if len(cols) >= 2:
-                    key = cols[0].lower()
-                    val = cols[1].replace('`', '').strip() 
-                    
-                    if 'filename' in key:
-                        extracted_dll = val
-                    elif 'upscaler inputs' in key or 'upscaler input' in key:
-                        upscaler_input = val
-                    elif 'fg inputs' in key or 'fg input' in key:
-                        fg_input = val
-                continue 
-                
-            if line_strip.startswith('![') or line_strip.startswith('#'):
-                continue
-                
-            if line_strip:
-                notes_lines.append(line_strip)
-        
+        if body:
+            # 1. 화면에 보이는 표(Table)를 긁어서 세팅값 추출
+            for table in body.find_all('table'):
+                for row in table.find_all('tr'):
+                    cols = row.find_all(['th', 'td'])
+                    if len(cols) >= 2:
+                        key = cols[0].get_text(strip=True).lower()
+                        val = cols[1].get_text(separator=" ", strip=True)
+                        
+                        if 'filename' in key:
+                            extracted_dll = val
+                        elif 'upscaler input' in key:
+                            upscaler_input = val
+                        elif 'fg input' in key:
+                            fg_input = val
+                            
+            # 2. 표 아래에 적힌 문단(p)과 리스트(li) 내용만 깔끔하게 노트로 취합
+            for child in body.children:
+                if child.name == 'p':
+                    text = child.get_text(separator=" ", strip=True)
+                    if text: notes_lines.append(text)
+                elif child.name == 'ul':
+                    for li in child.find_all('li', recursive=False):
+                        text = li.get_text(separator=" ", strip=True)
+                        if text: notes_lines.append(f"- {text}")
+                        
         clean_text = "\n".join(notes_lines).strip()
-        
         if len(clean_text) > 400:
             clean_text = clean_text[:400] + "...\n(상세 페이지 참조)"
             
         return {
-            "image": image_url, 
+            "image": "", 
             "notes": clean_text, 
             "dll": extracted_dll,
             "upscaler_input": upscaler_input,
             "fg_input": fg_input
         }
     except Exception as e:
-        return {"image": "", "notes": f"⚠️ 통신 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
+        return {"image": "", "notes": f"⚠️ 파싱 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
 
 def send_discord_alert(game, old_game=None, is_update=False):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
@@ -236,9 +222,11 @@ def send_discord_alert(game, old_game=None, is_update=False):
         fg_text = "**🚀 프레임 생성(FG) 인풋:** 미지원 / 정보 없음"
         
     native_api_text += mark_api
-    ko_notes = str(translate_ko(game.get('notes', '')))
     
-    notes_block = f"\n\n**📝 세부 설정 및 이슈 (클릭해서 보기)**{mark_notes}\n||{ko_notes}||" if ko_notes else ""
+    # 🌟 스포일러 태그(||) 삭제 및 가독성 개선
+    ko_notes = str(translate_ko(game.get('notes', '')))
+    notes_block = f"\n\n**📝 세부 설정 및 이슈**{mark_notes}\n{ko_notes}" if ko_notes else ""
+    
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
     desc = (
