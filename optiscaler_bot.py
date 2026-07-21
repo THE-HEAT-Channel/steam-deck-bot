@@ -43,6 +43,26 @@ def translate_ko(text):
     except:
         return text_str
 
+# 🌟 신규 추가: 스팀 상점 검색 API 연동 함수
+def get_steam_korean_name(eng_name):
+    """스팀 상점 API를 검색하여 공식 한글 게임명을 가져옵니다."""
+    # 검색 정확도를 높이기 위해 괄호 등 불필요한 기호를 잘라냅니다
+    search_term = eng_name.split('(')[0].strip()
+    
+    url = f"https://store.steampowered.com/api/storesearch/?term={urllib.parse.quote(search_term)}&l=korean&cc=kr"
+    try:
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('total', 0) > 0:
+                steam_name = data['items'][0].get('name', '')
+                # 검색 결과에 한글 문자가 포함되어 있을 때만 유효한 번역명으로 취급합니다
+                if re.search(r'[가-힣]', steam_name):
+                    return steam_name
+    except Exception as e:
+        print(f"스팀 API 검색 에러: {e}")
+    return None
+
 def parse_main_table():
     url = f"{BASE_WIKI_URL}/Compatibility-List.md"
     try:
@@ -70,7 +90,6 @@ def parse_main_table():
                 if not raw_game or all(c in '-:' for c in raw_game):
                     continue
                 
-                # 우측 썸네일용 이미지 추출
                 table_image = ""
                 if len(cols) >= 6:
                     img_match = re.search(r'\[.*?\]\((.*?)\)', cols[5])
@@ -158,7 +177,6 @@ def fetch_detail_page(link):
         return {"image": "", "notes": f"⚠️ 파싱 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
 
 def send_discord_alert(game, old_game=None, is_update=False):
-    # 🌟 1. 업데이트 발생 시, 기록된 메시지 ID를 불러와서 구버전 메시지 삭제
     if is_update and old_game and old_game.get('message_id'):
         old_msg_id = old_game['message_id']
         try:
@@ -166,7 +184,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
         except Exception as e:
             print(f"기존 메시지 삭제 실패: {e}")
 
-    # 발송 후 고유 메시지 ID를 돌려받기 위한 파라미터 추가
     post_url = WEBHOOK_URL
     if "wait=true" not in post_url.lower():
         post_url += "&wait=true" if "?" in post_url else "?wait=true"
@@ -188,7 +205,15 @@ def send_discord_alert(game, old_game=None, is_update=False):
         ko_status = "작동 불가"
 
     title_prefix = "🔄 상태 업데이트" if is_update else "✨ 신규 추가"
-    title = f"{title_prefix}: {game['name']}"
+    
+    # 🌟 스팀 API로 찾아낸 한글 이름이 있으면 제목에 병기 적용
+    ko_name = game.get('kor_name')
+    if ko_name:
+        display_name = f"{ko_name} ({game['name']})"
+    else:
+        display_name = game['name']
+        
+    title = f"{title_prefix}: {display_name}"
     
     mark_status = mark_api = mark_cheat = mark_notes = ""
     if is_update and old_game:
@@ -224,12 +249,11 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     if fg_input: fg_text = f"**🚀 프레임 생성(FG) 인풋:** `{fg_input}`"
     else: fg_text = "**🚀 프레임 생성(FG) 인풋:** 미지원 / 정보 없음"
-
+        
     native_api_text += mark_api
     ko_notes = str(translate_ko(game.get('notes', '')))
     notes_block = f"\n\n**📝 세부 설정 및 이슈**{mark_notes}\n{ko_notes}" if ko_notes else ""
     
-    # 🌟 링크 유무에 따라 출력할 텍스트 전체를 분기 처리합니다.
     if game.get('detail_link'):
         detail_link_text = f"[👉 OptiScaler 깃허브 상세 페이지(영문) 바로가기](https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']})"
     else:
@@ -242,7 +266,7 @@ def send_discord_alert(game, old_game=None, is_update=False):
         final_img = f"https://github.com{table_img}" if table_img.startswith('/') else table_img
     elif game.get('image'):
         final_img = game['image']
-
+    
     if final_img:
         image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
 
@@ -252,13 +276,12 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
         f"{up_text}\n"
         f"{fg_text}\n"
-        f"(원본 지원 API: {native_api_text})"
+        f"(원본 지원 API: {native_api_text})\n"
         f"{notes_block}\n"
         f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
         f"{detail_link_text}" # 🌟 수정된 링크 텍스트 변수 적용
         f"{image_notice}"
     )
-
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if final_img:
@@ -268,7 +291,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
     webhook.add_embed(embed)
     response = webhook.execute()
 
-    # 🌟 2. 새로 발송된 메시지의 고유 ID를 가져와서 반환
     new_message_id = None
     try:
         if response.status_code in [200, 201]:
@@ -291,12 +313,10 @@ def run():
         
     msg_count = 0
     
-    # 🌟 3. 더 이상 첫 번째 게임만 추출하지 않고 전체 데이터를 순회합니다.
     for name, data in all_games.items():
         old_data = history.get(name)
         is_new = old_data is None
         
-        # 메인 표 변경 여부 1차 확인
         main_changed = False
         if not is_new:
             if (data['status'] != old_data.get('status') or
@@ -305,7 +325,6 @@ def run():
                 data.get('table_image') != old_data.get('table_image')):
                 main_changed = True
 
-        # 상세 페이지를 불러와서 데이터 합침 (깃허브 서버 무리를 막기 위해 0.5초 대기)
         details = fetch_detail_page(data['detail_link'])
         data['image'] = details['image']
         data['notes'] = details['notes']
@@ -314,39 +333,38 @@ def run():
         data['fg_input'] = details['fg_input']
         time.sleep(0.5) 
         
-        # 이전 메시지 ID를 계승
+        # 🌟 스팀 API를 통한 한글 이름 검색 (서버 과부하를 막기 위해 신규 게임일 때만 호출)
+        if is_new:
+            data['kor_name'] = get_steam_korean_name(name)
+        else:
+            data['kor_name'] = old_data.get('kor_name')
+        
         if old_data and old_data.get('message_id'):
             data['message_id'] = old_data['message_id']
             
-        # 노트나 설정값까지 변했는지 2차 확인
         is_updated = False
         if not is_new:
             if (main_changed or
                 data['notes'] != old_data.get('notes') or
                 data['dll'] != old_data.get('dll') or
                 data['upscaler_input'] != old_data.get('upscaler_input') or
-                data['fg_input'] != old_data.get('fg_input')):
+                data['fg_input'] != old_data.get('fg_input') or
+                data.get('kor_name') != old_data.get('kor_name')): # 한글 이름 변동 체크 추가
                 is_updated = True
                 
-        # 🌟 4. 데이터가 아예 없거나(신규), 변경 사항이 감지되었을 때만 알림을 보냅니다.
         if is_new or is_updated:
             print(f"알림 전송 중: {name} (신규: {is_new}, 업데이트: {is_updated})")
             
             new_msg_id = send_discord_alert(data, old_game=old_data, is_update=is_updated)
             
-            # 발급받은 메시지 ID 저장
             if new_msg_id: data['message_id'] = new_msg_id
             
             history[name] = data
             msg_count += 1
             
-            # 전송 도중 에러가 나더라도 데이터가 유실되지 않도록 실시간 저장
             save_history(history)
-            
-            # 디스코드 연속 알림 속도 제한(Rate Limit) 방지를 위해 3초 대기
             time.sleep(3) 
         else:
-            # 변경사항이 없어도 전체 JSON 구조를 유지하기 위해 덮어쓰기
             history[name] = data
 
     save_history(history)
