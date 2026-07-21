@@ -229,7 +229,7 @@ def send_discord_alert(game, old_game=None, is_update=False):
     
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
-    desc = (
+    ddesc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**안티치트:** {ko_anti_cheat}\n\n"
         f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
@@ -237,7 +237,8 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{fg_text}\n"
         f"(원본 지원 API: {native_api_text})"
         f"{notes_block}\n\n"
-        f"[👉 OptiScaler 깃허브 상세 페이지 바로가기]({detail_url})"
+        f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
+        f"[👉 OptiScaler 깃허브 상세 페이지(영문) 바로가기]({detail_url})"
     )
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
