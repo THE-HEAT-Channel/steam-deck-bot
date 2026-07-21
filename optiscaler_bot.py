@@ -29,13 +29,19 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False)
 
 def translate_ko(text):
-    if not text or len(text) < 2 or text.lower() == "none" or text.lower() == "n/a":
-        return text
+    if not text:
+        return ""
+    
+    text_str = str(text)
+    if len(text_str) < 2 or text_str.lower() in ["none", "n/a"]:
+        return text_str
+        
     try:
         translator = GoogleTranslator(source='en', target='ko')
-        return translator.translate(text)
+        result = translator.translate(text_str)
+        return str(result) if result else text_str
     except:
-        return text
+        return text_str
 
 def parse_main_table():
     url = f"{BASE_WIKI_URL}/Compatibility-List.md"
@@ -126,10 +132,10 @@ def send_discord_alert(game, old_game=None, is_update=False):
         if game['anti_cheat'] != old_game.get('anti_cheat'): mark_cheat = " 🔄(업데이트 됨)"
         if game.get('notes') != old_game.get('notes'): mark_notes = " 🔄(노트 내용 업데이트 됨)"
 
-    ko_status = translate_ko(game['status']) + mark_status
-    ko_anti_cheat = translate_ko(game['anti_cheat']) + mark_cheat
-    native_api_text = game['native_api'] + mark_api
-    ko_notes = translate_ko(game.get('notes', ''))
+    ko_status = str(translate_ko(game.get('status', ''))) + mark_status
+    ko_anti_cheat = str(translate_ko(game.get('anti_cheat', ''))) + mark_cheat
+    native_api_text = str(game.get('native_api', '')) + mark_api
+    ko_notes = str(translate_ko(game.get('notes', '')))
     
     notes_block = f"\n\n**📝 설정 노트 및 알려진 이슈 (클릭해서 보기)**{mark_notes}\n||{ko_notes}||" if ko_notes else ""
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
