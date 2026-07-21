@@ -252,11 +252,11 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
         f"{up_text}\n"
         f"{fg_text}\n"
-        f"(원본 지원 API: {native_api_text})"
-        f"{notes_block}"
+        f"(원본 지원 API: {native_api_text})\n"
+        f"{notes_block}\n\n"
         f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
-        f"{detail_link_text}" # 🌟 수정된 링크 텍스트 변수 적용
-        f"{image_notice}\n\n"
+        f"{detail_link_text}\n\n" # 🌟 수정된 링크 텍스트 변수 적용
+        f"{image_notice}"
     )
 
 
