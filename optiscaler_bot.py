@@ -47,7 +47,7 @@ def parse_main_table():
     url = f"{BASE_WIKI_URL}/Compatibility-List.md"
     try:
         res = requests.get(url, timeout=10)
-        if res.status_code != 200: return {}
+        if res.status_code != 200: return []
         
         lines = res.text.split('\n')
         games = {}
@@ -62,10 +62,6 @@ def parse_main_table():
                 status = cols[1]
                 native_api = cols[2]
                 anti_cheat = cols[3]
-                
-                # 🌟 수정된 부분: 가이드라인(범례) 행 건너뛰기
-                if "GAME NAME" in raw_game.upper() or "✔" in status:
-                    continue
                 
                 match = re.search(r'\[(.*?)\]\((.*?)\)', raw_game)
                 if match:
