@@ -3,6 +3,7 @@ import json
 import os
 import time
 import re
+import urllib.parse
 from discord_webhook import DiscordWebhook, DiscordEmbed
 from deep_translator import GoogleTranslator
 
@@ -89,20 +90,37 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    """상세 페이지 주소를 올바르게 파싱하고, 표 내부의 정확한 설정값을 가져옵니다."""
+    """상세 페이지 주소를 완벽하게 보정하여 404 에러를 방지합니다."""
     if not link: return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
     
-    # 🌟 핵심: 절대 경로, 상대 경로 상관없이 페이지 이름만 정확히 추출 (404 에러 방지)
-    page_name = link.split('/')[-1]
-    if page_name.endswith('.md'):
-        page_name = page_name[:-3]
+    # 1. 절대 경로 / 상대 경로 정리
+    if "github.com/" in link:
+        page_path = link.split('/wiki/')[-1]
+    else:
+        page_path = link
         
-    url = f"{BASE_WIKI_URL}/{page_name}.md"
+    # 2. 앵커(#) 및 불필요한 공백 제거
+    page_path = page_path.split('#')[0].strip()
+    
+    # 3. 깃허브 위키 특성상 띄어쓰기는 하이픈(-)으로 변환됨
+    page_path = page_path.replace(" ", "-")
+    
+    # 4. 확장자 중복 방지
+    if page_path.endswith('.md'):
+        page_path = page_path[:-3]
+        
+    # 5. URL 인코딩 처리 (한글이나 특수문자 깨짐 방지)
+    page_path = urllib.parse.quote(page_path)
+        
+    url = f"{BASE_WIKI_URL}/{page_path}.md"
+    
     try:
         res = requests.get(url, timeout=10)
-        # 페이지가 없으면 빈 값 반환
+        
+        # 🌟 통신 실패 시 디스코드에서 바로 원인을 확인할 수 있도록 에러 기록
         if res.status_code != 200: 
-            return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
+            error_note = f"⚠️ 상세 페이지 데이터 로드 실패 (HTTP {res.status_code})\n요청 URL: {url}"
+            return {"image": "", "notes": error_note, "dll": "", "upscaler_input": "", "fg_input": ""}
         
         text = res.text
         image_url = ""
@@ -116,16 +134,14 @@ def fetch_detail_page(link):
         
         notes_lines = []
         
-        # 🌟 핵심: 마크다운 텍스트 한 줄씩 분석
         for line in text.split('\n'):
             line_strip = line.strip()
             
-            # 1. 표(Table) 파싱 (Filename, Upscaler Inputs, FG Inputs 값 추출)
             if line_strip.startswith('|'):
                 cols = [c.strip() for c in line_strip.split('|')][1:-1]
                 if len(cols) >= 2:
                     key = cols[0].lower()
-                    val = cols[1].replace('`', '').strip() # 백틱(`) 기호 제거
+                    val = cols[1].replace('`', '').strip() 
                     
                     if 'filename' in key:
                         extracted_dll = val
@@ -133,17 +149,14 @@ def fetch_detail_page(link):
                         upscaler_input = val
                     elif 'fg inputs' in key or 'fg input' in key:
                         fg_input = val
-                continue # 표의 내용은 노트에서 제외
+                continue 
                 
-            # 2. 이미지 태그와 제목(##)은 노트에서 제외
             if line_strip.startswith('![') or line_strip.startswith('#'):
                 continue
                 
-            # 3. 나머지는 중요한 '이슈 및 설정 노트'로 취합
             if line_strip:
                 notes_lines.append(line_strip)
         
-        # 줄바꿈 유지하여 노트 완성
         clean_text = "\n".join(notes_lines).strip()
         
         if len(clean_text) > 400:
@@ -156,8 +169,8 @@ def fetch_detail_page(link):
             "upscaler_input": upscaler_input,
             "fg_input": fg_input
         }
-    except:
-        return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
+    except Exception as e:
+        return {"image": "", "notes": f"⚠️ 통신 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
 
 def send_discord_alert(game, old_game=None, is_update=False):
     webhook = DiscordWebhook(url=WEBHOOK_URL)
