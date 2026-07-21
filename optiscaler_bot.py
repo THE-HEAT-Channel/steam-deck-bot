@@ -70,6 +70,13 @@ def parse_main_table():
                 if not raw_game or all(c in '-:' for c in raw_game):
                     continue
                 
+                # 🌟 Images 열(6번째 기둥)에서 이미지 링크 추출
+                table_image = ""
+                if len(cols) >= 6:
+                    img_match = re.search(r'\[.*?\]\((.*?)\)', cols[5])
+                    if img_match:
+                        table_image = img_match.group(1).strip()
+                
                 match = re.search(r'\[(.*?)\]\((.*?)\)', raw_game)
                 if match:
                     game_name = match.group(1).replace('*', '').strip()
@@ -83,7 +90,8 @@ def parse_main_table():
                     "status": status,
                     "native_api": native_api,
                     "anti_cheat": anti_cheat,
-                    "detail_link": detail_link
+                    "detail_link": detail_link,
+                    "table_image": table_image # 딕셔너리에 추가
                 }
         return games
     except Exception as e:
@@ -229,7 +237,7 @@ def send_discord_alert(game, old_game=None, is_update=False):
     
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
-    ddesc = (
+    desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**안티치트:** {ko_anti_cheat}\n\n"
         f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
@@ -242,6 +250,14 @@ def send_discord_alert(game, old_game=None, is_update=False):
     )
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
+    
+    # 🌟 메인 표에서 가져온 이미지가 있다면 우측 썸네일로 추가
+    table_img = game.get('table_image', '')
+    if table_img:
+        # 상대 경로(githubusercontent 등)일 경우를 대비해 절대 경로 보정
+        if table_img.startswith('/'):
+            table_img = f"https://github.com{table_img}"
+        embed.set_thumbnail(url=table_img)
     
     if game.get('image'):
         embed.set_image(url=game['image'])
