@@ -167,7 +167,20 @@ def fetch_detail_page(link):
         return {"image": "", "notes": f"⚠️ 파싱 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
 
 def send_discord_alert(game, old_game=None, is_update=False):
-    webhook = DiscordWebhook(url=WEBHOOK_URL)
+    # 🌟 1. 업데이트인 경우, 기존에 보냈던 옛날 메시지를 조용히 삭제합니다.
+    if is_update and old_game and old_game.get('message_id'):
+        old_msg_id = old_game['message_id']
+        try:
+            requests.delete(f"{WEBHOOK_URL}/messages/{old_msg_id}", timeout=10)
+        except Exception as e:
+            print(f"기존 메시지 삭제 실패: {e}")
+
+    # URL에 wait=true 파라미터가 있어야 발송 후 메시지 ID를 응답받을 수 있습니다.
+    post_url = WEBHOOK_URL
+    if "wait=true" not in post_url.lower():
+        post_url += "&wait=true" if "?" in post_url else "?wait=true"
+        
+    webhook = DiscordWebhook(url=post_url)
     
     status_raw = game['status']
     
@@ -236,7 +249,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
     
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
-    # 🌟 이미지 표시 방식 변경 (큰 이미지로 띄우고 텍스트 안내 추가)
     table_img = game.get('table_image', '')
     final_img = ""
     image_notice = ""
@@ -264,14 +276,27 @@ def send_discord_alert(game, old_game=None, is_update=False):
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
     
-    # 썸네일 대신 하단 메인 이미지로 삽입
     if final_img:
         embed.set_image(url=final_img)
         
     embed.set_footer(text="데이터 제공 (Developed & Maintained by): OptiScaler Team")
     
     webhook.add_embed(embed)
-    webhook.execute()
+    response = webhook.execute()
+
+    # 🌟 2. 새로 발송된 메시지의 고유 ID를 가져와서 반환합니다.
+    new_message_id = None
+    try:
+        if response.status_code in [200, 201]:
+            resp_json = response.json()
+            if isinstance(resp_json, list):
+                new_message_id = resp_json[0].get('id')
+            else:
+                new_message_id = resp_json.get('id')
+    except Exception as e:
+        print(f"메시지 ID 추출 실패: {e}")
+
+    return new_message_id
 
 def run():
     print("옵티스케일러 봇 [단일 항목 테스트 모드] 실행 중...")
@@ -299,7 +324,14 @@ def run():
         data['upscaler_input'] = details['upscaler_input']
         data['fg_input'] = details['fg_input']
         
-        send_discord_alert(data, old_game=old_data, is_update=bool(old_data))
+        # 🌟 3. 알림을 보낸 뒤 반환받은 메시지 ID를 JSON 데이터에 기록합니다.
+        new_msg_id = send_discord_alert(data, old_game=old_data, is_update=bool(old_data))
+        if new_msg_id:
+            data['message_id'] = new_msg_id
+        elif old_data and old_data.get('message_id'):
+            # 혹시라도 발급에 실패하면 예전 ID라도 유지
+            data['message_id'] = old_data['message_id']
+            
         history[name] = data
         msg_count += 1
         time.sleep(2) 
