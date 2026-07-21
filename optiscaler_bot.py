@@ -231,12 +231,24 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     native_api_text += mark_api
     
-    # 🌟 스포일러 태그(||) 삭제 및 가독성 개선
     ko_notes = str(translate_ko(game.get('notes', '')))
     notes_block = f"\n\n**📝 세부 설정 및 이슈**{mark_notes}\n{ko_notes}" if ko_notes else ""
     
     detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
     
+    # 🌟 이미지 표시 방식 변경 (큰 이미지로 띄우고 텍스트 안내 추가)
+    table_img = game.get('table_image', '')
+    final_img = ""
+    image_notice = ""
+
+    if table_img:
+        final_img = f"https://github.com{table_img}" if table_img.startswith('/') else table_img
+    elif game.get('image'):
+        final_img = game['image']
+
+    if final_img:
+        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
+
     desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**안티치트:** {ko_anti_cheat}\n\n"
@@ -244,23 +256,17 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{up_text}\n"
         f"{fg_text}\n"
         f"(원본 지원 API: {native_api_text})"
-        f"{notes_block}\n\n"
-        f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
+        f"{notes_block}"
+        f"{image_notice}\n\n"
+        f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, `nvngx.ini` 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
         f"[👉 OptiScaler 깃허브 상세 페이지(영문) 바로가기]({detail_url})"
     )
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
     
-    # 🌟 메인 표에서 가져온 이미지가 있다면 우측 썸네일로 추가
-    table_img = game.get('table_image', '')
-    if table_img:
-        # 상대 경로(githubusercontent 등)일 경우를 대비해 절대 경로 보정
-        if table_img.startswith('/'):
-            table_img = f"https://github.com{table_img}"
-        embed.set_thumbnail(url=table_img)
-    
-    if game.get('image'):
-        embed.set_image(url=game['image'])
+    # 썸네일 대신 하단 메인 이미지로 삽입
+    if final_img:
+        embed.set_image(url=final_img)
         
     embed.set_footer(text="데이터 제공 (Developed & Maintained by): OptiScaler Team")
     
