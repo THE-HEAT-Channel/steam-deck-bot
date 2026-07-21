@@ -224,12 +224,16 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     if fg_input: fg_text = f"**🚀 프레임 생성(FG) 인풋:** `{fg_input}`"
     else: fg_text = "**🚀 프레임 생성(FG) 인풋:** 미지원 / 정보 없음"
-        
+
     native_api_text += mark_api
     ko_notes = str(translate_ko(game.get('notes', '')))
     notes_block = f"\n\n**📝 세부 설정 및 이슈**{mark_notes}\n{ko_notes}" if ko_notes else ""
     
-    detail_url = f"https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']}" if game['detail_link'] else "상세 페이지 없음"
+    # 🌟 링크 유무에 따라 출력할 텍스트 전체를 분기 처리합니다.
+    if game.get('detail_link'):
+        detail_link_text = f"[👉 OptiScaler 깃허브 상세 페이지(영문) 바로가기](https://github.com/optiscaler/OptiScaler/wiki/{game['detail_link']})"
+    else:
+        detail_link_text = "🚫 **이 게임은 깃허브 상세 페이지가 없습니다.**"
     
     table_img = game.get('table_image', '')
     final_img = ""
@@ -239,6 +243,9 @@ def send_discord_alert(game, old_game=None, is_update=False):
     elif game.get('image'):
         final_img = game['image']
 
+    if final_img:
+        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
+
     desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**안티치트:** {ko_anti_cheat}\n\n"
@@ -247,13 +254,12 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{fg_text}\n"
         f"(원본 지원 API: {native_api_text})"
         f"{notes_block}"
-        f"{image_notice}\n\n"
         f"**💡 팁:** 번역된 내용이나 예상 설정으로 적용 시 문제가 발생하거나, 세부 설정이 필요하다면 아래 원문 페이지를 확인해 주세요.\n"
-        f"[👉 OptiScaler 깃허브 상세 페이지(영문) 바로가기]({detail_url})"
+        f"{detail_link_text}" # 🌟 수정된 링크 텍스트 변수 적용
+        f"{image_notice}\n\n"
     )
 
-    if final_img:
-        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
+
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if final_img:
         embed.set_image(url=final_img)
