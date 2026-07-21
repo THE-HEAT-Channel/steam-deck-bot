@@ -53,7 +53,12 @@ def parse_main_table():
         games = {}
         
         for line in lines:
-            if not line.startswith('|') or '---|' in line or 'Game' in line:
+            # 1. 표(Table)의 형태(| 기호로 시작)가 아니면 무시
+            if not line.strip().startswith('|'):
+                continue
+                
+            # 2. 마크다운 표의 구분선 행(|---|---| 등) 완벽 차단
+            if re.search(r'\|[-:\s]+\|[-:\s]+\|', line):
                 continue
                 
             cols = [c.strip() for c in line.split('|')][1:-1]
@@ -63,8 +68,12 @@ def parse_main_table():
                 native_api = cols[2]
                 anti_cheat = cols[3]
                 
-                # 🌟 수정된 부분: 가이드라인(범례) 행 건너뛰기
-                if "GAME NAME" in raw_game.upper() or "✔" in status:
+                # 3. 헤더/범례 가이드라인 행 차단
+                if "GAME NAME" in raw_game.upper() or "✔" in status or "Game" in raw_game:
+                    continue
+                    
+                # 4. 방어 로직: 이름이 비어있거나 - 기호로만 된 경우 차단
+                if not raw_game or all(c in '-:' for c in raw_game):
                     continue
                 
                 match = re.search(r'\[(.*?)\]\((.*?)\)', raw_game)
