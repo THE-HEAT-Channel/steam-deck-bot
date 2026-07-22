@@ -78,7 +78,7 @@ def parse_main_table():
                 raw_game = cols[0]
                 status = cols[1]
                 native_api = cols[2]
-                anti_cheat = cols[3]
+                optipatcher = cols[3] # 🌟 anti_cheat를 optipatcher로 완벽 교체!
                 
                 if "GAME NAME" in raw_game.upper() or "Game" in raw_game:
                     continue
@@ -117,8 +117,6 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    """깃허브 에러 방어 로직이 적용된 함수"""
-    # 🌟 반환값에 success 플래그를 추가하여 정상 통신 여부를 구분합니다.
     if not link: 
         return {"success": True, "image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
     
@@ -133,10 +131,8 @@ def fetch_detail_page(link):
     
     try:
         res = requests.get(url, timeout=10)
-        # 404 에러는 페이지가 진짜 없는 것이므로 정상(빈 값)으로 처리
         if res.status_code == 404: 
             return {"success": True, "image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
-        # 429 등 통신 제한 에러는 실패 처리 (기존 데이터 유지 목적)
         elif res.status_code != 200: 
             return {"success": False, "error_msg": f"⚠️ 통신 에러 (HTTP {res.status_code})"}
             
@@ -188,7 +184,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
         old_msg_id = old_game['message_id']
         try:
             requests.delete(f"{WEBHOOK_URL}/messages/{old_msg_id}", timeout=10)
-            # 🌟 디스코드 연달아 호출 시 에러를 막기 위한 쿨타임
             time.sleep(1) 
         except Exception as e:
             print(f"기존 메시지 삭제 실패: {e}")
@@ -223,7 +218,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     title = f"{title_prefix}: {display_name}"
     
-    # 🌟 None 비교 오류 방어 (old_data 값 호출 시 기본값 '' 사용)
     mark_status = mark_api = mark_patcher = mark_notes = ""
     if is_update and old_game:
         if game['status'] != old_game.get('status', ''): mark_status = " 🔄"
@@ -233,7 +227,7 @@ def send_discord_alert(game, old_game=None, is_update=False):
 
     ko_status += mark_status
     
-    # 🌟 OptiPatcher 지원 여부 텍스트 처리
+    # 🌟 OptiPatcher 지원 텍스트 처리 (안티치트 찌꺼기 제거됨)
     opti_raw = game.get('optipatcher', '').strip()
     if opti_raw == '✨' or opti_raw.lower() == 'yes':
         ko_optipatcher = "✨ 지원됨 (패치 필요)" + mark_patcher
@@ -279,6 +273,10 @@ def send_discord_alert(game, old_game=None, is_update=False):
     elif game.get('image'):
         final_img = game['image']
 
+    if final_img:
+        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
+        desc += image_notice
+
     desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**🔧 OptiPatcher:** {ko_optipatcher}\n\n"
@@ -292,9 +290,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{image_notice}"
     )
 
-
-    if final_img:
-        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if final_img:
         embed.set_image(url=final_img)
@@ -302,7 +297,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
     embed.set_footer(text="데이터 제공 (Developed & Maintained by): OptiScaler Team")
     webhook.add_embed(embed)
     
-    # 🌟 스크립트 강제 종료 방어
     try:
         response = webhook.execute()
         new_message_id = None
@@ -312,7 +306,7 @@ def send_discord_alert(game, old_game=None, is_update=False):
             else: new_message_id = resp_json.get('id')
         return new_message_id
     except Exception as e:
-        print(f"디스코드 웹훅 전송 실패 (서버 튕김 방어됨): {e}")
+        print(f"디스코드 웹훅 전송 실패: {e}")
         return None
 
 def run():
@@ -330,18 +324,17 @@ def run():
         old_data = history.get(name)
         is_new = old_data is None
         
-        # 🌟 None 방어 로직 적용
         main_changed = False
         if not is_new:
+            # 🌟 anti_cheat 비교 로직도 optipatcher로 교체 완료
             if (data['status'] != old_data.get('status', '') or
                 data['native_api'] != old_data.get('native_api', '') or
-                data['anti_cheat'] != old_data.get('anti_cheat', '') or
+                data['optipatcher'] != old_data.get('optipatcher', '') or
                 data.get('table_image', '') != old_data.get('table_image', '')):
                 main_changed = True
 
         details = fetch_detail_page(data['detail_link'])
         
-        # 🌟 깃허브 통신 성공 시에만 데이터 업데이트, 실패 시 과거 데이터 유지
         if details.get('success'):
             data['image'] = details.get('image', '')
             data['notes'] = details.get('notes', '')
@@ -372,7 +365,6 @@ def run():
         if old_data and old_data.get('message_id'):
             data['message_id'] = old_data['message_id']
             
-        # 🌟 None 방어 로직 적용
         is_updated = False
         if not is_new:
             if (main_changed or
