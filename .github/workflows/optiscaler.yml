@@ -35,7 +35,7 @@ jobs:
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
-          git add optiscaler_games.json
-          # 변경사항이 있을 경우에만 커밋
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update OptiScaler history"
-          git push
+          # 파일이 있으면 추가하고, 없으면 에러 없이 무시
+          git add optiscaler_games.json || echo "No file to add"
+          # 변경된 내용이 있을 때만 커밋하고 푸시 (에러 128 방지)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update games data" && git push)
