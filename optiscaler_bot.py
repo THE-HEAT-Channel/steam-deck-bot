@@ -273,10 +273,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
     elif game.get('image'):
         final_img = game['image']
 
-    if final_img:
-        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
-        desc += image_notice
-
     desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
         f"**🔧 OptiPatcher:** {ko_optipatcher}\n\n"
@@ -289,6 +285,10 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{detail_link_text}" # 🌟 수정된 링크 텍스트 변수 적용
         f"{image_notice}"
     )
+
+    if final_img:
+        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
+        desc += image_notice
 
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if final_img:
