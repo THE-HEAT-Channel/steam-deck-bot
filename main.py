@@ -112,7 +112,6 @@ def fetch_compatibilities_for_game(appid):
     deck_status = "Unknown"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-    # 1. Steam Deck 호환성 (내부 비공개 AJAX API)
     try:
         deck_url = f"https://store.steampowered.com/saleaction/ajaxgetdeckappcompatibilityreport?nAppID={appid}"
         res = requests.get(deck_url, headers=headers, timeout=5).json()
@@ -125,7 +124,6 @@ def fetch_compatibilities_for_game(appid):
     except:
         pass
 
-    # 🌟 핵심: 오류가 잦았던 리눅스 검증 로직을 제거하고 직관적인 1:1 상태 매칭 적용
     machine_status = "Unknown"
     os_status = "Unknown"
 
@@ -141,8 +139,22 @@ def fetch_compatibilities_for_game(appid):
 
     return {"deck": deck_status, "machine": machine_status, "os": os_status}
 
-def send_discord_alert(game, new_status, is_update=False):
-    webhook = DiscordWebhook(url=WEBHOOK_URL)
+def send_discord_alert(game, new_status, old_status=None, is_update=False):
+    # 🌟 기존 메시지 교체(삭제) 로직 추가
+    if is_update and old_status and isinstance(old_status, dict) and old_status.get('message_id'):
+        old_msg_id = old_status['message_id']
+        try:
+            requests.delete(f"{WEBHOOK_URL}/messages/{old_msg_id}", timeout=10)
+            time.sleep(1)
+        except Exception as e:
+            print(f"기존 메시지 삭제 실패: {e}")
+
+    # 발송 후 메시지 ID를 응답받기 위한 wait 파라미터 추가
+    post_url = WEBHOOK_URL
+    if "wait=true" not in post_url.lower():
+        post_url += "&wait=true" if "?" in post_url else "?wait=true"
+
+    webhook = DiscordWebhook(url=post_url)
     
     deck_info = STATUS_INFO.get(new_status['deck'], STATUS_INFO["Unknown"])
     machine_info = STATUS_INFO.get(new_status['machine'], STATUS_INFO["Unknown"])
@@ -174,10 +186,22 @@ def send_discord_alert(game, new_status, is_update=False):
         embed.set_image(url=game['img'])
 
     webhook.add_embed(embed)
-    webhook.execute()
+    
+    # 🌟 새 메시지 ID 추출 및 반환 방어 로직 적용
+    try:
+        response = webhook.execute()
+        new_message_id = None
+        if response.status_code in [200, 201]:
+            resp_json = response.json()
+            if isinstance(resp_json, list): new_message_id = resp_json[0].get('id')
+            else: new_message_id = resp_json.get('id')
+        return new_message_id
+    except Exception as e:
+        print(f"디스코드 웹훅 전송 실패: {e}")
+        return None
 
 def run():
-    print("스팀 호환성 갱신 중 (JSON API + 논리적 매칭 패치 적용)...")
+    print("스팀 호환성 갱신 중 (JSON API + 메시지 대체 패치 적용)...")
     history = load_history()
     top_games = fetch_top_games()
     
@@ -222,28 +246,51 @@ def run():
         old_status = history.get(appid)
         current_status = fetch_compatibilities_for_game(appid)
         
+        # 🌟 기존 메시지 ID 계승
+        if old_status and isinstance(old_status, dict) and old_status.get('message_id'):
+            current_status['message_id'] = old_status['message_id']
+            
         processed_base_titles.add(base_title)
+        
+        is_legacy = isinstance(old_status, str)
+        status_changed = False
+        
+        if not old_status or is_legacy:
+            status_changed = True
+        else:
+            if (old_status.get('deck') != current_status['deck'] or
+                old_status.get('machine') != current_status['machine'] or
+                old_status.get('os') != current_status['os']):
+                status_changed = True
         
         if not old_status:
             if current_status['deck'] != "Unknown" or current_status['machine'] != "Unknown":
                 print(f"✨ 신규: {game['title']}")
-                send_discord_alert(game, current_status, is_update=False)
+                new_msg_id = send_discord_alert(game, current_status, is_update=False)
+                if new_msg_id: current_status['message_id'] = new_msg_id
+                
                 history[appid] = current_status
                 msg_count += 1
-                time.sleep(1)
+                save_history(history)
+                time.sleep(3)
             else:
                 history[appid] = current_status
                 
-        elif isinstance(old_status, str) or old_status != current_status:
-            
+        elif status_changed:
             if current_status['deck'] == "Unknown" and current_status['machine'] == "Unknown" and current_status['os'] == "Unknown":
                 continue
                 
             print(f"🔄 업데이트 됨: {game['title']}")
-            send_discord_alert(game, current_status, is_update=True)
+            new_msg_id = send_discord_alert(game, current_status, old_status=old_status, is_update=True)
+            if new_msg_id: current_status['message_id'] = new_msg_id
+            
             history[appid] = current_status
             msg_count += 1
-            time.sleep(1)
+            save_history(history)
+            time.sleep(3)
+        else:
+            # 변경 사항이 없어도 전체 JSON 구조를 안전하게 유지
+            history[appid] = current_status
             
     if msg_count > 0:
         save_history(history)

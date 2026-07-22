@@ -78,7 +78,7 @@ def parse_main_table():
                 raw_game = cols[0]
                 status = cols[1]
                 native_api = cols[2]
-                optipatcher = cols[3] # 🌟 anti_cheat를 optipatcher로 완벽 교체!
+                optipatcher = cols[3] 
                 
                 if "GAME NAME" in raw_game.upper() or "Game" in raw_game:
                     continue
@@ -87,11 +87,13 @@ def parse_main_table():
                 
                 table_image = ""
                 if len(cols) >= 6:
-                    img_match = re.search(r'\[.*?\]\((.*?)\)', cols[5])
+                    # 🌟 이미지 링크도 괄호 방어 적용
+                    img_match = re.search(r'\[.*?\]\((.*?)\)(?!\))', cols[5])
                     if img_match:
                         table_image = img_match.group(1).strip()
                 
-                match = re.search(r'\[(.*?)\]\((.*?)\)', raw_game)
+                # 🌟 핵심 수정: 주소 내부에 괄호가 포함되어 있어도 마크다운의 '진짜 끝 괄호'를 정확히 찾아냅니다.
+                match = re.search(r'\[(.*?)\]\((.*?)\)(?!\))', raw_game)
                 if match:
                     game_name = match.group(1).replace('*', '').strip()
                     detail_link = match.group(2).strip()
