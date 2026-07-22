@@ -43,12 +43,8 @@ def translate_ko(text):
     except:
         return text_str
 
-# 🌟 신규 추가: 스팀 상점 검색 API 연동 함수
 def get_steam_korean_name(eng_name):
-    """스팀 상점 API를 검색하여 공식 한글 게임명을 가져옵니다."""
-    # 검색 정확도를 높이기 위해 괄호 등 불필요한 기호를 잘라냅니다
     search_term = eng_name.split('(')[0].strip()
-    
     url = f"https://store.steampowered.com/api/storesearch/?term={urllib.parse.quote(search_term)}&l=korean&cc=kr"
     try:
         res = requests.get(url, timeout=5)
@@ -56,7 +52,6 @@ def get_steam_korean_name(eng_name):
             data = res.json()
             if data.get('total', 0) > 0:
                 steam_name = data['items'][0].get('name', '')
-                # 검색 결과에 한글 문자가 포함되어 있을 때만 유효한 번역명으로 취급합니다
                 if re.search(r'[가-힣]', steam_name):
                     return steam_name
     except Exception as e:
@@ -101,14 +96,18 @@ def parse_main_table():
                     game_name = match.group(1).replace('*', '').strip()
                     detail_link = match.group(2).strip()
                 else:
+                    game_link_match = re.search(r'href=["\'](.*?)["\']', raw_game)
+                    if game_link_match:
+                        detail_link = game_link_match.group(1).split('/')[-1]
+                    else:
+                        detail_link = None
                     game_name = raw_game.replace('*', '').strip()
-                    detail_link = None
                 
                 games[game_name] = {
                     "name": game_name,
                     "status": status,
                     "native_api": native_api,
-                    "anti_cheat": anti_cheat,
+                    "optipatcher": optipatcher,
                     "detail_link": detail_link,
                     "table_image": table_image
                 }
@@ -118,7 +117,10 @@ def parse_main_table():
         return {}
 
 def fetch_detail_page(link):
-    if not link: return {"image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
+    """깃허브 에러 방어 로직이 적용된 함수"""
+    # 🌟 반환값에 success 플래그를 추가하여 정상 통신 여부를 구분합니다.
+    if not link: 
+        return {"success": True, "image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
     
     if "github.com/" in link:
         page_path = link.split('/wiki/')[-1]
@@ -131,8 +133,12 @@ def fetch_detail_page(link):
     
     try:
         res = requests.get(url, timeout=10)
-        if res.status_code != 200: 
-            return {"image": "", "notes": f"⚠️ 상세 페이지 데이터 로드 실패 (HTTP {res.status_code})", "dll": "", "upscaler_input": "", "fg_input": ""}
+        # 404 에러는 페이지가 진짜 없는 것이므로 정상(빈 값)으로 처리
+        if res.status_code == 404: 
+            return {"success": True, "image": "", "notes": "", "dll": "", "upscaler_input": "", "fg_input": ""}
+        # 429 등 통신 제한 에러는 실패 처리 (기존 데이터 유지 목적)
+        elif res.status_code != 200: 
+            return {"success": False, "error_msg": f"⚠️ 통신 에러 (HTTP {res.status_code})"}
             
         soup = BeautifulSoup(res.text, 'html.parser')
         body = soup.find('div', class_='markdown-body')
@@ -167,6 +173,7 @@ def fetch_detail_page(link):
             clean_text = clean_text[:400] + "...\n(상세 페이지 참조)"
             
         return {
+            "success": True,
             "image": "", 
             "notes": clean_text, 
             "dll": extracted_dll,
@@ -174,13 +181,15 @@ def fetch_detail_page(link):
             "fg_input": fg_input
         }
     except Exception as e:
-        return {"image": "", "notes": f"⚠️ 파싱 에러 발생: {e}", "dll": "", "upscaler_input": "", "fg_input": ""}
+        return {"success": False, "error_msg": f"⚠️ 파싱 에러 발생: {e}"}
 
 def send_discord_alert(game, old_game=None, is_update=False):
     if is_update and old_game and old_game.get('message_id'):
         old_msg_id = old_game['message_id']
         try:
             requests.delete(f"{WEBHOOK_URL}/messages/{old_msg_id}", timeout=10)
+            # 🌟 디스코드 연달아 호출 시 에러를 막기 위한 쿨타임
+            time.sleep(1) 
         except Exception as e:
             print(f"기존 메시지 삭제 실패: {e}")
 
@@ -206,7 +215,6 @@ def send_discord_alert(game, old_game=None, is_update=False):
 
     title_prefix = "🔄 상태 업데이트" if is_update else "✨ 신규 추가"
     
-    # 🌟 스팀 API로 찾아낸 한글 이름이 있으면 제목에 병기 적용
     ko_name = game.get('kor_name')
     if ko_name:
         display_name = f"{ko_name} ({game['name']})"
@@ -215,20 +223,24 @@ def send_discord_alert(game, old_game=None, is_update=False):
         
     title = f"{title_prefix}: {display_name}"
     
-    mark_status = mark_api = mark_cheat = mark_notes = ""
+    # 🌟 None 비교 오류 방어 (old_data 값 호출 시 기본값 '' 사용)
+    mark_status = mark_api = mark_patcher = mark_notes = ""
     if is_update and old_game:
-        if game['status'] != old_game.get('status'): mark_status = " 🔄"
-        if game['native_api'] != old_game.get('native_api'): mark_api = " 🔄"
-        if game['anti_cheat'] != old_game.get('anti_cheat'): mark_cheat = " 🔄"
-        if game.get('notes') != old_game.get('notes'): mark_notes = " 🔄"
+        if game['status'] != old_game.get('status', ''): mark_status = " 🔄"
+        if game['native_api'] != old_game.get('native_api', ''): mark_api = " 🔄"
+        if game['optipatcher'] != old_game.get('optipatcher', ''): mark_patcher = " 🔄"
+        if game.get('notes', '') != old_game.get('notes', ''): mark_notes = " 🔄"
 
     ko_status += mark_status
     
-    ko_anti_cheat = game['anti_cheat'].strip()
-    if not ko_anti_cheat or ko_anti_cheat.lower() in ['none', 'n/a']:
-        ko_anti_cheat = "없음 (싱글플레이)" + mark_cheat
+    # 🌟 OptiPatcher 지원 여부 텍스트 처리
+    opti_raw = game.get('optipatcher', '').strip()
+    if opti_raw == '✨' or opti_raw.lower() == 'yes':
+        ko_optipatcher = "✨ 지원됨 (패치 필요)" + mark_patcher
+    elif opti_raw:
+        ko_optipatcher = opti_raw + mark_patcher
     else:
-        ko_anti_cheat = str(translate_ko(ko_anti_cheat)) + mark_cheat
+        ko_optipatcher = "❌ 불필요 / 정보 없음" + mark_patcher
         
     native_api_text = str(game.get('native_api', ''))
     
@@ -266,13 +278,10 @@ def send_discord_alert(game, old_game=None, is_update=False):
         final_img = f"https://github.com{table_img}" if table_img.startswith('/') else table_img
     elif game.get('image'):
         final_img = game['image']
-    
-    if final_img:
-        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
 
     desc = (
         f"**호환성 상태:** {icon} **{ko_status}**\n"
-        f"**안티치트:** {ko_anti_cheat}\n\n"
+        f"**🔧 OptiPatcher:** {ko_optipatcher}\n\n"
         f"**⚙️ 덮어쓸 DLL 이름:** `{target_dll}`\n"
         f"{up_text}\n"
         f"{fg_text}\n"
@@ -283,24 +292,28 @@ def send_discord_alert(game, old_game=None, is_update=False):
         f"{image_notice}"
     )
 
+
+    if final_img:
+        image_notice = "\n\n**🖼️ 적용 스크린샷** (아래 이미지를 클릭하면 확대됩니다)"
     embed = DiscordEmbed(title=title, description=desc, color=color)
     if final_img:
         embed.set_image(url=final_img)
         
     embed.set_footer(text="데이터 제공 (Developed & Maintained by): OptiScaler Team")
     webhook.add_embed(embed)
-    response = webhook.execute()
-
-    new_message_id = None
+    
+    # 🌟 스크립트 강제 종료 방어
     try:
+        response = webhook.execute()
+        new_message_id = None
         if response.status_code in [200, 201]:
             resp_json = response.json()
             if isinstance(resp_json, list): new_message_id = resp_json[0].get('id')
             else: new_message_id = resp_json.get('id')
+        return new_message_id
     except Exception as e:
-        print(f"메시지 ID 추출 실패: {e}")
-
-    return new_message_id
+        print(f"디스코드 웹훅 전송 실패 (서버 튕김 방어됨): {e}")
+        return None
 
 def run():
     print("옵티스케일러 봇 [전체 데이터 실전 모드] 시작 중...")
@@ -317,23 +330,40 @@ def run():
         old_data = history.get(name)
         is_new = old_data is None
         
+        # 🌟 None 방어 로직 적용
         main_changed = False
         if not is_new:
-            if (data['status'] != old_data.get('status') or
-                data['native_api'] != old_data.get('native_api') or
-                data['anti_cheat'] != old_data.get('anti_cheat') or
-                data.get('table_image') != old_data.get('table_image')):
+            if (data['status'] != old_data.get('status', '') or
+                data['native_api'] != old_data.get('native_api', '') or
+                data['anti_cheat'] != old_data.get('anti_cheat', '') or
+                data.get('table_image', '') != old_data.get('table_image', '')):
                 main_changed = True
 
         details = fetch_detail_page(data['detail_link'])
-        data['image'] = details['image']
-        data['notes'] = details['notes']
-        data['dll'] = details['dll']
-        data['upscaler_input'] = details['upscaler_input']
-        data['fg_input'] = details['fg_input']
+        
+        # 🌟 깃허브 통신 성공 시에만 데이터 업데이트, 실패 시 과거 데이터 유지
+        if details.get('success'):
+            data['image'] = details.get('image', '')
+            data['notes'] = details.get('notes', '')
+            data['dll'] = details.get('dll', '')
+            data['upscaler_input'] = details.get('upscaler_input', '')
+            data['fg_input'] = details.get('fg_input', '')
+        else:
+            if not is_new:
+                data['image'] = old_data.get('image', '')
+                data['notes'] = old_data.get('notes', '')
+                data['dll'] = old_data.get('dll', '')
+                data['upscaler_input'] = old_data.get('upscaler_input', '')
+                data['fg_input'] = old_data.get('fg_input', '')
+            else:
+                data['image'] = ""
+                data['notes'] = details.get('error_msg', '')
+                data['dll'] = ""
+                data['upscaler_input'] = ""
+                data['fg_input'] = ""
+                
         time.sleep(0.5) 
         
-        # 🌟 스팀 API를 통한 한글 이름 검색 (서버 과부하를 막기 위해 신규 게임일 때만 호출)
         if is_new:
             data['kor_name'] = get_steam_korean_name(name)
         else:
@@ -342,14 +372,15 @@ def run():
         if old_data and old_data.get('message_id'):
             data['message_id'] = old_data['message_id']
             
+        # 🌟 None 방어 로직 적용
         is_updated = False
         if not is_new:
             if (main_changed or
-                data['notes'] != old_data.get('notes') or
-                data['dll'] != old_data.get('dll') or
-                data['upscaler_input'] != old_data.get('upscaler_input') or
-                data['fg_input'] != old_data.get('fg_input') or
-                data.get('kor_name') != old_data.get('kor_name')): # 한글 이름 변동 체크 추가
+                data['notes'] != old_data.get('notes', '') or
+                data['dll'] != old_data.get('dll', '') or
+                data['upscaler_input'] != old_data.get('upscaler_input', '') or
+                data['fg_input'] != old_data.get('fg_input', '') or
+                data.get('kor_name', '') != old_data.get('kor_name', '')):
                 is_updated = True
                 
         if is_new or is_updated:
@@ -357,7 +388,8 @@ def run():
             
             new_msg_id = send_discord_alert(data, old_game=old_data, is_update=is_updated)
             
-            if new_msg_id: data['message_id'] = new_msg_id
+            if new_msg_id: 
+                data['message_id'] = new_msg_id
             
             history[name] = data
             msg_count += 1
