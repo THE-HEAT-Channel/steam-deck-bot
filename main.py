@@ -46,7 +46,7 @@ def fetch_top_games():
     games = []
     for page in range(PAGES_TO_SCAN):
         start_count = page * 50
-        url = f"https://store.steampowered.com/search/?sort_by=Reviews_DESC&category1=998&l=koreana&cc=kr&start={start_count}"
+        url = f"https://store.steampowered.com/search/?filter=topsellers&category1=998&l=koreana&cc=kr&start={start_count}"
         
         try:
             response = requests.get(url, timeout=10)
