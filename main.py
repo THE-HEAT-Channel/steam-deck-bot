@@ -258,9 +258,8 @@ def run():
         if not old_status or is_legacy:
             status_changed = True
         else:
-            if (old_status.get('deck') != current_status['deck'] or
-                old_status.get('machine') != current_status['machine'] or
-                old_status.get('os') != current_status['os']):
+            # machine과 os는 deck 상태에 따라 자동 부여되므로 deck만 비교하여 과거 데이터 오탐지 및 중복 알림을 방지합니다.
+            if old_status.get('deck') != current_status['deck']:
                 status_changed = True
         
         if not old_status:
